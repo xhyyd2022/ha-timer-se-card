@@ -35,8 +35,8 @@ type: module
 ```yaml
 type: custom:timer-se-card
 entity: button.fan_toggle        # 必填:倒计时结束后要触发的实体(任意类型,不限制)
-action: toggle                   # 可选:倒计时结束后的动作,默认 toggle
-                                 #   toggle = 切换(开↔关) / on = 开启 / off = 关闭
+action: off                      # 可选:倒计时结束后的动作,默认 off
+                                 #   on = 开启 / off = 关闭
 card_title: 睡前关风扇            # 可选:卡片标题
 presets:                         # 可选:预设时间(纯数字=分钟,支持 "30s"/"1h" 单位)
   - 15
@@ -105,11 +105,10 @@ actions:
 
 `action` 支持三种模式,通过图形化编辑器下拉或 YAML 配置:
 
-| `action` 值  | 含义               | 执行的服务              |
-| ------------ | ------------------ | ----------------------- |
-| `toggle`(默认) | 切换(开↔关)       | `homeassistant.toggle`  |
-| `on`         | 开启               | `homeassistant.turn_on` |
-| `off`        | 关闭               | `homeassistant.turn_off`|
+| `action` 值 | 含义     | 执行的服务               |
+| ----------- | -------- | ----------------------- |
+| `off`(默认) | 关闭     | `homeassistant.turn_off` |
+| `on`        | 开启     | `homeassistant.turn_on`  |
 
 部分实体类型有特殊处理(与 `action` 模式无关):
 
@@ -142,7 +141,7 @@ actions:
 - **输入框**:输入 `5`/`30s`/`1h 30m` 等直接设置时间
 - **控制按钮**:开始 / 暂停 / 继续 / 重置
 - **方形进度块**:按剩余比例点亮(可显示百分比),`countdown_display` 可切换 数字/方块/两者
-- **倒计时结束**:自动触发配置的实体(切换/开启/关闭),或触发后端事件供自动化使用
+- **倒计时结束**:自动触发配置的实体(开启/关闭),或触发后端事件供自动化使用
 
 ## 状态持久化
 

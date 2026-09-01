@@ -7,7 +7,7 @@
 //
 // 相对上游的主要精简:
 //   - 移除对 simple_timer 集成的依赖(不再调用 start_timer/cancel_timer 等服务)
-//   - 实体改为通用实体:倒计时结束时仅触发配置的实体(切换/开启/关闭或自定义动作)
+//   - 实体改为通用实体:倒计时结束时仅触发配置的实体(开启/关闭或自定义动作)
 //   - 删除冗余功能:每日运行时长(daily usage)、定时面板(schedule)、看门狗(watchdog)、
 //     独立电源按钮、服务器时间同步、长按重置等
 //   - 仅保留:倒计时显示、进度块条、滑块拖动、预设按钮、输入框与控制按钮
@@ -52,7 +52,7 @@ interface TimerButton {
 interface TimerSeCardConfig {
   type?: string;
   entity?: string;
-  action?: string; // "toggle" | "on" | "off" | 自定义 service 对象
+  action?: string; // "on" | "off" | 自定义 service 对象
   actions?: Array<{ service: string; target?: Record<string, unknown>; data?: Record<string, unknown> }>;
   card_title?: string; // 卡片标题(与上游一致)
   presets?: (number | string | { minutes?: number; seconds?: number; label?: string })[];
@@ -156,7 +156,7 @@ function normalizePreset(p: PresetInput): TimerButton | null {
 // 根据实体域生成默认结束动作
 function defaultActionFor(entity: string, mode: string) {
   const domain = entity.split(".")[0];
-  const m = mode || "toggle";
+  const m = mode || "off";
   switch (domain) {
     case "button":
       return { service: "button.press", target: { entity_id: entity } };
@@ -165,7 +165,7 @@ function defaultActionFor(entity: string, mode: string) {
     case "scene":
       return { service: "scene.turn_on", target: { entity_id: entity } };
     default: {
-      const service = m === "on" ? "turn_on" : m === "off" ? "turn_off" : "toggle";
+      const service = m === "on" ? "turn_on" : "turn_off";
       return { service: `homeassistant.${service}`, target: { entity_id: entity } };
     }
   }
@@ -184,6 +184,7 @@ export class TimerSeCard extends LitElement {
   private _endAt = 0;
   private _firedAt: number | null = null;
   private _pendingFire = false; // hass 未就绪时待补触发的动作
+  private _restored = false; // 是否已从 localStorage 恢复过状态(仅首次 setConfig)
   private _countdownInterval: ReturnType<typeof setInterval> | null = null;
   private _storageKey = "timer-se-card:default";
   private _valid = false;
@@ -197,7 +198,7 @@ export class TimerSeCard extends LitElement {
     return {
       entity: "",
       card_title: "定时器",
-      action: "toggle",
+      action: "off",
       timer_buttons: [...DEFAULT_PRESETS],
       slider_max: DEFAULT_MAX_MINUTES,
       slider_unit: "min",
@@ -227,7 +228,6 @@ export class TimerSeCard extends LitElement {
           selector: {
             select: {
               options: [
-                { value: "toggle", label: "切换(toggle):开↔关" },
                 { value: "on", label: "开启(turn_on)" },
                 { value: "off", label: "关闭(turn_off)" },
               ],
@@ -352,7 +352,7 @@ export class TimerSeCard extends LitElement {
           case "entity":
             return "时间到后自动触发该实体(任意类型,不限制设备)";
           case "action":
-            return "切换=开↔关互换,也可固定为开启或关闭;按钮/脚本/场景类实体仍按各自动作触发";
+            return "倒计时结束后开启或关闭该实体;按钮/脚本/场景类实体仍按各自动作触发";
           case "countdown_display":
             return "选择倒计时数字、方形进度块或两者同时显示";
           case "slider_max":
@@ -381,7 +381,7 @@ export class TimerSeCard extends LitElement {
   setConfig(config: TimerSeCardConfig): void {
     const merged: TimerSeCardConfig = {
       entity: undefined,
-      action: "toggle",
+      action: "off",
       presets: [...DEFAULT_PRESETS],
       slider_max: DEFAULT_MAX_MINUTES,
       slider_unit: "min",
@@ -395,8 +395,8 @@ export class TimerSeCard extends LitElement {
 
     if (typeof merged.action === "string") {
       merged.action = merged.action.toLowerCase();
-      if (!["toggle", "on", "off"].includes(merged.action)) {
-        merged.action = "toggle";
+      if (!["on", "off"].includes(merged.action)) {
+        merged.action = "off";
       }
     }
     if (!(merged.slider_max! > 0)) merged.slider_max = DEFAULT_MAX_MINUTES;
@@ -423,19 +423,24 @@ export class TimerSeCard extends LitElement {
     );
     this._storageKey = "timer-se-card:" + (merged.entity || "default");
 
-    this._restoreState();
-    // 恢复运行中的倒计时后启动计时器(connectedCallback 早于 setConfig,不会启动)
-    if (this._state === "running") {
-      this._startCountdown();
-    } else if (this._state === "finished" && !this._firedAt) {
-      // 页面关闭期间倒计时已结束且动作未触发,补触发一次(hass 未就绪则待 hass 到达)
-      this._firedAt = Date.now();
-      if (this._hass) {
-        this._fireActions();
-      } else {
-        this._pendingFire = true;
+    // 恢复逻辑只在首次 setConfig 时执行;编辑器调整配置会多次调用 setConfig,
+    // 重复恢复会干扰运行中的倒计时,并可能重复补触发动作
+    if (!this._restored) {
+      this._restored = true;
+      this._restoreState();
+      // 恢复运行中的倒计时后启动计时器(connectedCallback 早于 setConfig,不会启动)
+      if (this._state === "running") {
+        this._startCountdown();
+      } else if (this._state === "finished" && !this._firedAt) {
+        // 页面关闭期间倒计时已结束且动作未触发,补触发一次(hass 未就绪则待 hass 到达)
+        this._firedAt = Date.now();
+        if (this._hass) {
+          this._fireActions();
+        } else {
+          this._pendingFire = true;
+        }
+        this._saveState();
       }
-      this._saveState();
     }
     this.requestUpdate();
   }
@@ -704,7 +709,7 @@ export class TimerSeCard extends LitElement {
       return [config.action as any];
     }
     if (config.entity) {
-      let mode = typeof config.action === "string" ? config.action : "toggle";
+      let mode = typeof config.action === "string" ? config.action : "off";
       return [defaultActionFor(config.entity, mode)];
     }
     return [];

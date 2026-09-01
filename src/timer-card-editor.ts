@@ -176,7 +176,7 @@ export class TimerCardEditor extends LitElement {
   private _computeHelper = (schema: any): string => {
     const helpers: Record<string, string> = {
       entity: "时间到后自动触发该实体(任意类型,不限制设备)",
-      action: "切换=开↔关互换,也可固定为开启或关闭",
+      action: "倒计时结束后开启或关闭该实体",
       countdown_display: "选择倒计时数字、方形进度块或两者同时显示",
       slider_max: "拖动滑块可在该范围内设置时间",
       slider_unit: "滑块数值的单位(秒/分钟/小时/天)",
@@ -199,7 +199,6 @@ export class TimerCardEditor extends LitElement {
           select: {
             mode: "dropdown",
             options: [
-              { value: "toggle", label: "切换(toggle):开↔关" },
               { value: "on", label: "开启(turn_on)" },
               { value: "off", label: "关闭(turn_off)" },
             ],
