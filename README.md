@@ -16,9 +16,6 @@
    - 类别:**Dashboard / Lovelace 前端插件**
 
 2. 点击 **下载**,重启 Home Assistant 前端(或刷新页面)。
-3. 在仪表盘编辑模式添加卡片 → 选择 **Timer SE Card**。
-
-> 也可以使用 [My Home Assistant](https://my.home-assistant.io/redirect/hacs_repository/?owner=xhyyd2022&repository=ha-timer-se-card) 一键添加。
 
 ## 使用方式
 
