@@ -797,6 +797,11 @@ export class TimerSeCard extends LitElement {
     } else if (this._state === "finished") {
       this._sliderValue = 0;
     }
+    // 直接同步滑块 DOM 的 value,确保 thumb 位置实时跟随(不依赖渲染)
+    const slider = this.shadowRoot?.querySelector<HTMLInputElement>(".tse-slider");
+    if (slider && slider.value !== String(this._sliderValue)) {
+      slider.value = String(this._sliderValue);
+    }
     this.requestUpdate();
   }
 
@@ -847,8 +852,6 @@ export class TimerSeCard extends LitElement {
     });
 
     const unit = (config.slider_unit as string) || "min";
-    const unitLabel =
-      unit === "sec" ? "秒" : unit === "hr" ? "小时" : "分钟";
     const maxValue = (config.slider_max as number) || DEFAULT_MAX_MINUTES;
     const sliderVal = Math.min(this._sliderValue, maxValue);
     const fillPercent = maxValue > 0 ? Math.round((sliderVal / maxValue) * 100) : 0;
@@ -891,7 +894,6 @@ export class TimerSeCard extends LitElement {
           ? html`<div class="tse-slider-row">
               <input class="tse-slider" type="range" min="0" step="1" max="${maxValue}" value="${sliderVal}" style="--tse-fill:${fillPercent}%" @input=${this._handleSliderChange} />
               <div class="tse-slider-right">
-                <span class="tse-slider-label">${sliderVal} ${unitLabel}</span>
                 <div class="tse-control-btn ${isActive ? "is-active" : ""}" @click=${() => this._toggle()}>
                   <ha-icon icon="${this._controlIcon()}"></ha-icon>
                 </div>
@@ -1086,12 +1088,6 @@ export class TimerSeCard extends LitElement {
       gap: 10px;
       flex-shrink: 0;
       white-space: nowrap;
-    }
-    .tse-slider-label {
-      font-size: 1.05em;
-      color: var(--primary-text-color, #1c1c1e);
-      min-width: 52px;
-      text-align: center;
     }
     .tse-control-btn {
       width: 50px;
