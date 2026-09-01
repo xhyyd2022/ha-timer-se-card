@@ -183,6 +183,7 @@ export class TimerSeCard extends LitElement {
   private _remainingSeconds = 0;
   private _endAt = 0;
   private _firedAt: number | null = null;
+  private _pendingFire = false; // hass 未就绪时待补触发的动作
   private _countdownInterval: ReturnType<typeof setInterval> | null = null;
   private _storageKey = "timer-se-card:default";
   private _valid = false;
@@ -423,6 +424,19 @@ export class TimerSeCard extends LitElement {
     this._storageKey = "timer-se-card:" + (merged.entity || "default");
 
     this._restoreState();
+    // 恢复运行中的倒计时后启动计时器(connectedCallback 早于 setConfig,不会启动)
+    if (this._state === "running") {
+      this._startCountdown();
+    } else if (this._state === "finished" && !this._firedAt) {
+      // 页面关闭期间倒计时已结束且动作未触发,补触发一次(hass 未就绪则待 hass 到达)
+      this._firedAt = Date.now();
+      if (this._hass) {
+        this._fireActions();
+      } else {
+        this._pendingFire = true;
+      }
+      this._saveState();
+    }
     this.requestUpdate();
   }
 
@@ -448,6 +462,11 @@ export class TimerSeCard extends LitElement {
   protected updated(changedProperties: Map<string | number | symbol, unknown>): void {
     if (changedProperties.has("hass")) {
       this._applyTheme();
+      // hass 就绪后补触发恢复时未执行的动作
+      if (this._pendingFire && this.hass) {
+        this._pendingFire = false;
+        this._fireActions();
+      }
     }
   }
 
@@ -511,7 +530,8 @@ export class TimerSeCard extends LitElement {
       this._totalSeconds = typeof saved.total === "number" ? saved.total : this._remainingSeconds;
     }
     if (typeof saved.sliderValue === "number") {
-      this._sliderValue = saved.sliderValue;
+      const maxValue = (this._config.slider_max as number) || DEFAULT_MAX_MINUTES;
+      this._sliderValue = Math.min(saved.sliderValue, maxValue);
     }
   }
 
@@ -715,11 +735,16 @@ export class TimerSeCard extends LitElement {
     const eventType = this._config.event_type;
     if (eventType && this.hass?.connection) {
       try {
-        this.hass.connection.sendMessagePromise({
+        const p = this.hass.connection.sendMessagePromise({
           type: "fire_event",
           event_type: eventType,
           event_data: this._config.event_data || {},
         });
+        if (p && typeof p.catch === "function") {
+          p.catch((e: unknown) =>
+            console.error("timer-se-card: 触发事件 " + eventType + " 失败", e)
+          );
+        }
       } catch (e) {
         console.error("timer-se-card: 触发事件 " + eventType + " 失败", e);
       }
