@@ -183,7 +183,7 @@ export class TimerCardEditor extends LitElement {
       slider_max: "拖动滑块可在该范围内设置时间",
       slider_unit: "滑块数值的单位(秒/分钟/小时/天)",
       hide_slider: "隐藏滑块,只用预设按钮和输入框设置时间",
-      show_manual_input: "显示底部的输入框与设置/重置按钮(手动输入时间)",
+      show_manual_input: "显示底部的输入框与设置/重置按钮(手动输入时间,默认关闭)",
       reverse_mode: "反转模式:倒计时结束后开启实体(延迟启动),而不是关闭",
       event_type: "倒计时结束后向 HA 后端触发该事件(如 timer_finished),自动化可用 event trigger 监听",
       event_data: "事件附带数据,例如 { \"timer_id\": \"123456\" }",

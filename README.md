@@ -47,7 +47,7 @@ slider_max: 120                  # 可选:滑块最大值(默认 120)
 slider_unit: min                 # 可选:滑块单位 min/sec/hr/day,默认 min
 countdown_display: both          # 可选:时间显示方式 countdown(仅数字)/ progress(仅方块)/ both
 hide_slider: false               # 可选:隐藏滑块(只用预设/输入框)
-show_manual_input: true          # 可选:是否显示底部手动设置输入框(输入+设置+重置)
+show_manual_input: false         # 可选:是否显示底部手动设置输入框(输入+设置+重置),默认关闭
 reverse_mode: false              # 可选:反转模式(延迟启动,结束时开启实体)
 autostart: true                  # 可选:点击预设后是否立即开始,默认 true
 color: "#ff8f00"                 # 可选:主题色,默认跟随 HA 主题

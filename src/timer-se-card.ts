@@ -60,7 +60,7 @@ interface TimerSeCardConfig {
   slider_unit?: string; // "min" | "sec" | "hr"(上游默认 min)
   countdown_display?: string; // "countdown" | "progress" | "both"(上游默认 countdown)
   hide_slider?: boolean; // 隐藏滑块
-  show_manual_input?: boolean; // 是否显示底部手动设置时间输入行(默认 true)
+  show_manual_input?: boolean; // 是否显示底部手动设置时间输入行(默认 false)
   reverse_mode?: boolean; // 反转模式(延迟启动)
   autostart?: boolean;
   color?: string;
@@ -392,7 +392,7 @@ export class TimerSeCard extends LitElement {
       slider_unit: "min",
       countdown_display: "countdown",
       hide_slider: false,
-      show_manual_input: true,
+      show_manual_input: false,
       reverse_mode: false,
       autostart: true,
       color: undefined,
@@ -847,7 +847,7 @@ export class TimerSeCard extends LitElement {
     const maxValue = (config.slider_max as number) || DEFAULT_MAX_MINUTES;
     const sliderVal = Math.min(this._sliderValue, maxValue);
     const showSlider = !config.hide_slider;
-    const showManualInput = config.show_manual_input !== false;
+    const showManualInput = config.show_manual_input === true;
     const showReset = this._state !== "idle" || this._totalSeconds > 0;
 
     return html`
