@@ -16,6 +16,7 @@
 
 import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import "./timer-card-editor"; // 注册 timer-se-card-editor(预设 chips + 文本输入)
 
 // 最小 HomeAssistant 接口(自定义卡片常用写法,避免依赖前端内部类型)
 interface HAState {
@@ -59,6 +60,7 @@ interface TimerSeCardConfig {
   slider_unit?: string; // "min" | "sec" | "hr" | "day"(上游默认 min)
   countdown_display?: string; // "countdown" | "progress" | "both"(上游默认 countdown)
   hide_slider?: boolean; // 隐藏滑块
+  show_manual_input?: boolean; // 是否显示底部手动设置时间输入行(默认 true)
   reverse_mode?: boolean; // 反转模式(延迟启动)
   autostart?: boolean;
   color?: string;
@@ -85,7 +87,7 @@ function formatTime(totalSeconds: number): string {
   return `${pad2(h)}:${pad2(m)}:${pad2(sec)}`;
 }
 
-// 解析时间字符串:"5"(分钟)、"30s"、"1h"、"1h 30m"、"1小时30分"
+// 解析时间字符串:"5"(分钟)、"30s"、"1h"、"1d"、"1h 30m"、"1小时30分"
 function parseDuration(str: string): number | null {
   const s = str.trim();
   if (!s) return null;
@@ -93,7 +95,7 @@ function parseDuration(str: string): number | null {
   let total = 0;
   for (const token of tokens) {
     if (!token) continue;
-    const m = token.match(/^(\d+(?:\.\d+)?)\s*(小时|分钟|秒|[hms时分])?$/);
+    const m = token.match(/^(\d+(?:\.\d+)?)\s*(小时|分钟|天|秒|[hmsd时分天])?$/);
     if (!m) return null;
     const num = parseFloat(m[1]);
     const unit = m[2] || "m";
@@ -111,6 +113,10 @@ function parseDuration(str: string): number | null {
       case "s":
       case "秒":
         total += num;
+        break;
+      case "d":
+      case "天":
+        total += num * 86400;
         break;
       default:
         return null;
@@ -131,10 +137,10 @@ function normalizePreset(p: PresetInput): TimerButton | null {
   } else if (typeof p === "string") {
     const secs = parseDuration(p);
     if (secs === null) return null;
-    const mins = secs / 60;
-    value = Number.isInteger(mins) ? mins : secs;
+    // 带单位字符串统一换算为秒,点击时不再重复换算
+    value = secs;
+    unit = "sec";
     label = p;
-    unit = /s\s*$/.test(p.trim()) ? "sec" : /h\s*$/.test(p.trim()) ? "hr" : "min";
   } else if (p && typeof p === "object") {
     if (typeof p.minutes === "number") {
       value = p.minutes;
@@ -196,12 +202,17 @@ export class TimerSeCard extends LitElement {
       entity: "",
       card_title: "定时器",
       action: "toggle",
-      presets: [...DEFAULT_PRESETS],
+      timer_buttons: [...DEFAULT_PRESETS],
       slider_max: DEFAULT_MAX_MINUTES,
       slider_unit: "min",
       countdown_display: "countdown",
       autostart: true,
     };
+  }
+
+  // 图形化编辑器(参考上游:预设用 chips + 文本输入框)
+  static getConfigElement() {
+    return document.createElement("timer-se-card-editor");
   }
 
   static getConfigForm() {
@@ -386,6 +397,7 @@ export class TimerSeCard extends LitElement {
       slider_unit: "min",
       countdown_display: "countdown",
       hide_slider: false,
+      show_manual_input: true,
       reverse_mode: false,
       autostart: true,
       color: undefined,
@@ -406,7 +418,10 @@ export class TimerSeCard extends LitElement {
       merged.countdown_display = "countdown";
     }
 
-    this._presets = (merged.presets || DEFAULT_PRESETS)
+    // 预设来源:timer_buttons(编辑器写此字段,支持数字分钟/带单位字符串)
+    // 向后兼容 presets
+    const buttons = merged.timer_buttons ?? merged.presets ?? DEFAULT_PRESETS;
+    this._presets = (Array.isArray(buttons) ? buttons : DEFAULT_PRESETS)
       .map(normalizePreset)
       .filter((b): b is TimerButton => b !== null);
 
@@ -891,6 +906,7 @@ export class TimerSeCard extends LitElement {
     const maxValue = (config.slider_max as number) || DEFAULT_MAX_MINUTES;
     const sliderVal = Math.min(this._sliderValue, maxValue);
     const showSlider = !config.hide_slider;
+    const showManualInput = config.show_manual_input !== false;
     const showReset = this._state !== "idle" || this._totalSeconds > 0;
 
     return html`
@@ -930,11 +946,13 @@ export class TimerSeCard extends LitElement {
 
         ${presets.length ? html`<div class="tse-presets">${presets}</div>` : ""}
 
-        <div class="tse-input-row">
-          <input class="tse-input" type="text" placeholder="如 5 / 30s / 1h 30m" @keydown=${(e: KeyboardEvent) => e.key === "Enter" && this._setFromInput()} />
-          <button class="tse-set-btn" @click=${() => this._setFromInput()}>设置</button>
-          ${showReset ? html`<button class="tse-set-btn is-ghost" @click=${() => this._reset()}>重置</button>` : ""}
-        </div>
+        ${showManualInput
+          ? html`<div class="tse-input-row">
+              <input class="tse-input" type="text" placeholder="如 5 / 30s / 1h 30m" @keydown=${(e: KeyboardEvent) => e.key === "Enter" && this._setFromInput()} />
+              <button class="tse-set-btn" @click=${() => this._setFromInput()}>设置</button>
+              ${showReset ? html`<button class="tse-set-btn is-ghost" @click=${() => this._reset()}>重置</button>` : ""}
+            </div>`
+          : ""}
       </ha-card>
     `;
   }
