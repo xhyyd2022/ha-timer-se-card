@@ -12,16 +12,10 @@
     actions: undefined,
     action: undefined,
     name: undefined,
-    presets: [
-      { label: "5分", minutes: 5 },
-      { label: "10分", minutes: 10 },
-      { label: "30分", minutes: 30 },
-    ],
+    presets: [5, 10, 30],
     max_minutes: 60,
     autostart: true,
     color: null,
-    ring_width: 14,
-    size: 260,
     text: {
       status_idle: "待机",
       status_running: "倒计时中",
@@ -32,12 +26,50 @@
       resume: "继续",
       reset: "重置",
       done: "完成",
+      set: "设置",
     },
   };
 
   const SVG_SIZE = 220;
   const CENTER = SVG_SIZE / 2;
+  const RING_WIDTH = 14; // 圆环粗细(固定,随尺寸自适应)
   const DEFAULT_MAX_SECS = 60 * 60; // 1 hour
+
+  // 解析时间字符串,例如: "5"(分钟)、"30s"、"1h"、"1h 30m"、"1小时30分"
+  // 规则: 数字 + 可选单位后缀(h/m/s 或 时/分/秒);无后缀默认为分钟(m);支持空格分隔多个值
+  function parseDuration(str) {
+    if (typeof str !== "string") return null;
+    const s = str.trim();
+    if (!s) return null;
+    const tokens = s.split(/\s+/);
+    let total = 0;
+    for (const token of tokens) {
+      if (!token) continue;
+      const m = token.match(/^(\d+(?:\.\d+)?)\s*(小时|分钟|秒|[hms时分])?$/);
+      if (!m) return null;
+      const num = parseFloat(m[1]);
+      const unit = m[2] || "m";
+      switch (unit) {
+        case "h":
+        case "时":
+        case "小时":
+          total += num * 3600;
+          break;
+        case "m":
+        case "分":
+        case "分钟":
+          total += num * 60;
+          break;
+        case "s":
+        case "秒":
+          total += num;
+          break;
+        default:
+          return null;
+      }
+    }
+    return Math.max(0, Math.round(total));
+  }
 
   function formatTime(totalSeconds) {
     const s = Math.max(0, Math.floor(totalSeconds));
@@ -50,14 +82,14 @@
 
   function normalizePreset(p) {
     if (typeof p === "number") {
-      return { label: p + "分钟", seconds: p * 60 };
+      return { label: p + "分", seconds: p * 60 };
     }
     if (typeof p === "object" && p !== null) {
-      if (typeof p.seconds === "number") {
-        return { label: p.label || p.seconds + "秒", seconds: p.seconds };
-      }
       if (typeof p.minutes === "number") {
         return { label: p.label || p.minutes + "分", seconds: p.minutes * 60 };
+      }
+      if (typeof p.seconds === "number") {
+        return { label: p.label || p.seconds + "秒", seconds: p.seconds };
       }
       if (typeof p.duration === "number") {
         return { label: p.label || p.duration + "秒", seconds: p.duration };
@@ -82,18 +114,14 @@
 
   class TimerSeCard extends HTMLElement {
     static get version() {
-      return "1.2.0";
+      return "1.3.0";
     }
 
     static getStubConfig() {
       return {
         entity: "",
         name: "定时器",
-        presets: [
-          { label: "5分", minutes: 5 },
-          { label: "10分", minutes: 10 },
-          { label: "30分", minutes: 30 },
-        ],
+        presets: [5, 10, 30],
         max_minutes: 60,
         autostart: true,
       };
@@ -137,9 +165,8 @@
             selector: {
               object: {
                 multiple: true,
-                label_field: "label",
+                label_field: "minutes",
                 fields: {
-                  label: { label: "名称", selector: { text: {} } },
                   minutes: { label: "分钟", selector: { number: { min: 1, max: 1440 } } },
                 },
               },
@@ -151,14 +178,6 @@
             title: "高级选项",
             schema: [
               { name: "autostart", selector: { boolean: {} } },
-              {
-                type: "grid",
-                name: "",
-                schema: [
-                  { name: "size", selector: { number: { min: 160, max: 600, unit_of_measurement: "px" } } },
-                  { name: "ring_width", selector: { number: { min: 4, max: 40, unit_of_measurement: "px" } } },
-                ],
-              },
               { name: "color", selector: { text: {} } },
               {
                 name: "actions",
@@ -191,10 +210,6 @@
               return "点击预设后立即开始";
             case "color":
               return "主题色(如 #ff8f00)";
-            case "size":
-              return "表盘尺寸";
-            case "ring_width":
-              return "圆环粗细";
             case "actions":
               return "自定义结束动作";
             default:
@@ -206,7 +221,7 @@
             case "entity":
               return "时间到后自动触发该实体(按钮/开关/灯等)";
             case "presets":
-              return "每个预设 = 名称 + 分钟数,点击卡片上的标签可一键跳转";
+              return "仅需填写分钟数,标签会自动生成,点击卡片上的标签可一键跳转";
             case "actions":
               return "填写后优先于实体的自动动作,例如 service 填 button.press";
             case "color":
@@ -301,15 +316,13 @@
     }
 
     getCardSize() {
-      const size = this._config && this._config.size ? this._config.size : 260;
-      return Math.round(size / 50 + 2);
+      return 6;
     }
 
     getGridOptions() {
       return {
-        rows: 4,
-        columns: 4,
-        min_rows: 3,
+        rows: 6,
+        columns: 6,
       };
     }
 
@@ -454,6 +467,19 @@
       } else {
         this._render();
       }
+    }
+
+    _setFromInput() {
+      const input = this.shadowRoot.querySelector(".tse-input");
+      if (!input) return;
+      const seconds = parseDuration(input.value);
+      if (seconds === null || seconds <= 0) {
+        input.classList.add("is-invalid");
+        setTimeout(() => input.classList.remove("is-invalid"), 800);
+        return;
+      }
+      input.classList.remove("is-invalid");
+      this._setPreset(seconds);
     }
 
     _toggleCenter() {
@@ -617,7 +643,7 @@
       const config = this._config;
       if (!svg || !config) return;
 
-      const ringWidth = config.ring_width;
+      const ringWidth = RING_WIDTH;
       const circumference = 2 * Math.PI * (CENTER - ringWidth / 2);
       const progress = this._progress();
       const dashOffset = circumference * (1 - progress);
@@ -703,8 +729,7 @@
       }
 
       const color = config.color || "var(--accent-color, #ff8f00)";
-      const ringWidth = config.ring_width;
-      const size = config.size;
+      const ringWidth = RING_WIDTH;
       const progress = this._progress();
       const knobAngle = this._knobAngle();
       const circumference = 2 * Math.PI * (CENTER - ringWidth / 2);
@@ -770,7 +795,7 @@
             --tse-accent: ${color};
           }
         </style>
-        <ha-card class="tse-card" style="--tse-size:${size}px">
+        <ha-card class="tse-card">
           <div class="tse-header">
             <span class="tse-title">${this._escape(headerTitle)}</span>
             ${headerChip}
@@ -778,7 +803,7 @@
           </div>
 
           <div class="tse-dial">
-            <svg class="tse-svg" width="${size}" height="${size}" viewBox="0 0 ${SVG_SIZE} ${SVG_SIZE}">
+            <svg class="tse-svg" viewBox="0 0 ${SVG_SIZE} ${SVG_SIZE}">
               <circle class="tse-track" cx="${CENTER}" cy="${CENTER}" r="${CENTER - ringWidth / 2}" stroke-width="${ringWidth}"></circle>
               <circle class="tse-progress ${this._state === 'finished' ? 'is-finished' : ''}" cx="${CENTER}" cy="${CENTER}" r="${CENTER - ringWidth / 2}" stroke-width="${ringWidth}"
                 stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}" transform="rotate(-90 ${CENTER} ${CENTER})"></circle>
@@ -795,6 +820,11 @@
 
           <div class="tse-presets" ${presetsHtml ? "" : 'style="display:none"'}>
             ${presetsHtml}
+          </div>
+
+          <div class="tse-input-row">
+            <input class="tse-input" type="text" placeholder="输入时间:如 5 / 30s / 1h 30m" />
+            <button class="tse-btn tse-btn-main" data-action="set-time">${this._escape(text.set)}</button>
           </div>
 
           <div class="tse-controls">
@@ -822,12 +852,17 @@
           const action = target.getAttribute("data-action");
           if (action === "center") this._toggleCenter();
           else if (action === "reset") this._reset();
+          else if (action === "set-time") this._setFromInput();
           return;
         }
         const preset = e.target.closest("[data-seconds]");
         if (preset) {
           this._setPreset(Number(preset.getAttribute("data-seconds")), preset.textContent);
         }
+      };
+
+      this._inputKeydown = (e) => {
+        if (e.key === "Enter") this._setFromInput();
       };
 
       this._pointerDown = (e) => {
@@ -837,6 +872,7 @@
       this._pointerUp = (e) => this._onPointerUp(e);
 
       this.shadowRoot.addEventListener("click", this._clickHandler);
+      this.shadowRoot.addEventListener("keydown", this._inputKeydown);
       this.shadowRoot.addEventListener("pointerdown", this._pointerDown);
       this.shadowRoot.addEventListener("pointermove", this._pointerMove);
       this.shadowRoot.addEventListener("pointerup", this._pointerUp);
@@ -845,6 +881,7 @@
 
     _detachEvents() {
       this.shadowRoot.removeEventListener("click", this._clickHandler);
+      this.shadowRoot.removeEventListener("keydown", this._inputKeydown);
       this.shadowRoot.removeEventListener("pointerdown", this._pointerDown);
       this.shadowRoot.removeEventListener("pointermove", this._pointerMove);
       this.shadowRoot.removeEventListener("pointerup", this._pointerUp);
@@ -905,11 +942,15 @@
         }
         .tse-dial {
           position: relative;
-          display: flex;
-          justify-content: center;
+          width: 100%;
+          max-width: 340px;
+          margin: 0 auto;
+          container-type: inline-size;
         }
         .tse-svg {
           display: block;
+          width: 100%;
+          height: auto;
           overflow: visible;
           touch-action: none;
         }
@@ -952,8 +993,8 @@
           top: 50%;
           left: 50%;
           transform: translate(-50%, -50%);
-          width: calc(var(--tse-size) * 0.54);
-          height: calc(var(--tse-size) * 0.54);
+          width: 54%;
+          height: 54%;
           border-radius: 50%;
           border: none;
           background: transparent;
@@ -971,7 +1012,7 @@
           background: var(--divider-color, rgba(128, 128, 128, 0.12));
         }
         .tse-time {
-          font-size: calc(var(--tse-size) * 0.115);
+          font-size: clamp(20px, 11.5cqw, 38px);
           font-weight: 500;
           font-variant-numeric: tabular-nums;
           letter-spacing: 0.5px;
@@ -1006,6 +1047,31 @@
           color: var(--tse-on-accent);
           font-weight: 500;
           box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+        }
+        .tse-input-row {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+          justify-content: center;
+        }
+        .tse-input {
+          flex: 1;
+          max-width: 220px;
+          height: 40px;
+          padding: 0 14px;
+          border: 1px solid var(--divider-color, rgba(128, 128, 128, 0.4));
+          border-radius: 20px;
+          background: transparent;
+          color: var(--primary-text-color, #1c1c1e);
+          font-size: 14px;
+          font-family: inherit;
+          outline: none;
+        }
+        .tse-input:focus {
+          border-color: var(--tse-accent);
+        }
+        .tse-input.is-invalid {
+          border-color: var(--error-color, #db4437);
         }
         .tse-controls {
           display: flex;
