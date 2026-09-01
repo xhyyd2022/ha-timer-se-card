@@ -647,6 +647,12 @@ export class TimerSeCard extends LitElement {
     }
   }
 
+  // 秒 → 滑块单位值(向上取整,保证剩余非零时滑块不为 0)
+  private _secondsToUnit(unit: string, seconds: number): number {
+    const perUnit = this._unitToSeconds(unit, 1);
+    return perUnit > 0 ? Math.ceil(seconds / perUnit) : 0;
+  }
+
   private _setFromInput(): void {
     const input = this.shadowRoot?.querySelector<HTMLInputElement>(".tse-input");
     if (!input) return;
@@ -780,6 +786,17 @@ export class TimerSeCard extends LitElement {
 
   private _updateRender(): void {
     this._timeRemaining = this._state === "finished" ? "00:00:00" : formatTime(this._remainingSeconds);
+    // 倒计时运行时滑块跟随剩余时间递减,归零后滑块归零
+    const unit = (this._config.slider_unit as string) || "min";
+    const maxValue = (this._config.slider_max as number) || DEFAULT_MAX_MINUTES;
+    if (this._state === "running" || this._state === "paused" || this._state === "idle") {
+      this._sliderValue = Math.min(
+        maxValue,
+        this._secondsToUnit(unit, this._remainingSeconds)
+      );
+    } else if (this._state === "finished") {
+      this._sliderValue = 0;
+    }
     this.requestUpdate();
   }
 
