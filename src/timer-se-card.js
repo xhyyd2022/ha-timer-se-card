@@ -10,7 +10,7 @@
   const DEFAULT_CONFIG = {
     entity: undefined,
     actions: undefined,
-    action: undefined,
+    action: "toggle",
     name: undefined,
     presets: [5, 10, 30],
     max_minutes: 60,
@@ -98,8 +98,9 @@
     return null;
   }
 
-  function defaultActionFor(entity) {
+  function defaultActionFor(entity, mode) {
     const domain = entity.split(".")[0];
+    const m = mode || "toggle";
     switch (domain) {
       case "button":
         return { service: "button.press", target: { entity_id: entity } };
@@ -107,8 +108,14 @@
         return { service: "script.turn_on", target: { entity_id: entity } };
       case "scene":
         return { service: "scene.turn_on", target: { entity_id: entity } };
-      default:
-        return { service: "homeassistant.toggle", target: { entity_id: entity } };
+      default: {
+        const service =
+          m === "on" ? "turn_on" : m === "off" ? "turn_off" : "toggle";
+        return {
+          service: "homeassistant." + service,
+          target: { entity_id: entity },
+        };
+      }
     }
   }
 
@@ -153,6 +160,19 @@
                     ],
                   },
                 ],
+              },
+            },
+          },
+          {
+            name: "action",
+            selector: {
+              select: {
+                options: [
+                  { value: "toggle", label: "反转(toggle):开↔关" },
+                  { value: "on", label: "开启(turn_on)" },
+                  { value: "off", label: "关闭(turn_off)" },
+                ],
+                mode: "dropdown",
               },
             },
           },
@@ -202,6 +222,8 @@
               return "卡片标题";
             case "entity":
               return "倒计时结束后触发的实体";
+            case "action":
+              return "倒计时结束后的动作";
             case "max_minutes":
               return "最大可设置时间";
             case "presets":
@@ -220,6 +242,8 @@
           switch (schema.name) {
             case "entity":
               return "时间到后自动触发该实体(按钮/开关/灯等)";
+            case "action":
+              return "反转=切换开/关,也可固定为开启或关闭;按钮/脚本/场景类实体仍按各自动作触发";
             case "presets":
               return "仅需填写分钟数,标签会自动生成,点击卡片上的标签可一键跳转";
             case "actions":
@@ -268,6 +292,14 @@
       merged.presets = (config.presets || DEFAULT_CONFIG.presets)
         .map(normalizePreset)
         .filter(Boolean);
+      // action 支持三模式:"toggle"(反转,默认)/ "on"(开启) / "off"(关闭)
+      // 也兼容自定义 service 对象(如 { service: "button.press", target: {...} })
+      if (typeof merged.action === "string") {
+        merged.action = merged.action.toLowerCase();
+        if (!["toggle", "on", "off"].includes(merged.action)) {
+          merged.action = "toggle";
+        }
+      }
       if (merged.max_minutes && merged.max_minutes > 0) {
         this._maxSecsValue = merged.max_minutes * 60;
       } else {
@@ -286,7 +318,13 @@
       }
 
       this._config = merged;
-      this._valid = !!(merged.entity || merged.actions || merged.action);
+      this._valid = !!(
+        merged.entity ||
+        (Array.isArray(merged.actions) && merged.actions.length) ||
+        (merged.action &&
+          typeof merged.action === "object" &&
+          merged.action.service)
+      );
       this._storageKey = "timer-se-card:" + (merged.entity || "default");
       this._cacheKey = (merged.entity || "none") + "|" + (merged.actions ? JSON.stringify(merged.actions) : "") + "|" + (merged.action ? JSON.stringify(merged.action) : "");
 
@@ -296,14 +334,37 @@
 
     set hass(hass) {
       this._hass = hass;
+      this._applyTheme();
       if (this._config) {
         this._render();
       }
     }
 
     connectedCallback() {
+      this._applyTheme();
       this._attachEvents();
       this._render();
+    }
+
+    // 与官方卡片一致:主动把 HA 主题变量应用到本元素,
+    // 避免在编辑预览等场景下出现"一团黑"(变量未注入)。
+    _applyTheme() {
+      const hass = this._hass;
+      if (!hass) return;
+      try {
+        if (typeof hass.applyThemesOnElement === "function") {
+          hass.applyThemesOnElement(this, hass.themes, this._config?.theme);
+          return;
+        }
+      } catch (e) {
+        /* ignore */
+      }
+      // 兼容未暴露 API 的旧版本:至少注入暗色模式标记
+      if (hass.themes && hass.themes.darkMode) {
+        this.setAttribute("data-theme", "dark");
+      } else {
+        this.removeAttribute("data-theme");
+      }
     }
 
     disconnectedCallback() {
@@ -461,6 +522,7 @@
       this._total = this._remaining;
       this._endAt = 0;
       this._state = "idle";
+      this._firedAt = null; // 新定时开始前清除已触发标记,确保结束时一定执行动作
       this._saveState();
       if (this._config.autostart && this._remaining > 0) {
         this._start();
@@ -506,11 +568,13 @@
       if (Array.isArray(config.actions) && config.actions.length) {
         return config.actions.filter((a) => a && typeof a.service === "string");
       }
-      if (config.action && typeof config.action.service === "string") {
+      if (config.action && typeof config.action === "object" && config.action.service) {
         return [config.action];
       }
       if (config.entity) {
-        return [defaultActionFor(config.entity)];
+        const mode =
+          typeof config.action === "string" ? config.action : "toggle";
+        return [defaultActionFor(config.entity, mode)];
       }
       return [];
     }
@@ -899,6 +963,10 @@
         .tse-card {
           font-family: var(--primary-font-family, "Roboto", sans-serif);
           color: var(--primary-text-color, #1c1c1e);
+          background: var(--ha-card-background, var(--card-background-color, #fff));
+          border-radius: var(--ha-card-border-radius, 12px);
+          border: 1px solid var(--ha-card-border-color, var(--divider-color, #e0e0e0));
+          box-shadow: var(--ha-card-box-shadow, none);
           padding: 16px;
           box-sizing: border-box;
           display: flex;
@@ -907,6 +975,11 @@
           user-select: none;
           -webkit-user-select: none;
           width: 100%;
+        }
+        :host([data-theme="dark"]) .tse-card {
+          background: var(--ha-card-background, var(--card-background-color, #1c1c1e));
+          color: var(--primary-text-color, #e1e1e1);
+          border-color: var(--ha-card-border-color, var(--divider-color, #3a3a3a));
         }
         .tse-header {
           display: flex;

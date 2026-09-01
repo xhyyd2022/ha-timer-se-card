@@ -34,6 +34,8 @@ type: module
 ```yaml
 type: custom:timer-se-card
 entity: button.fan_toggle        # 必填:倒计时结束后要触发的实体(按钮/开关/灯/脚本等)
+action: toggle                   # 可选:倒计时结束后的动作,默认 toggle
+                                 #   toggle = 反转(开↔关) / on = 开启 / off = 关闭
 name: 睡前关风扇                  # 可选:卡片标题
 presets:                         # 可选:预设时间(仅填分钟数,标签自动生成)
   - 5
@@ -58,14 +60,21 @@ color: "#ff8f00"                 # 可选:主题色,默认跟随 HA 主题
 
 ### 结束动作(actions)
 
-默认情况下,卡片会根据实体类型自动触发:
+`action` 支持三种模式,通过图形化编辑器下拉或 YAML 配置:
 
-| 实体类型        | 自动执行的动作              |
+| `action` 值  | 含义               | 执行的服务              |
+| ------------ | ------------------ | ----------------------- |
+| `toggle`(默认) | 反转(开↔关)       | `homeassistant.toggle`  |
+| `on`         | 开启               | `homeassistant.turn_on` |
+| `off`        | 关闭               | `homeassistant.turn_off`|
+
+部分实体类型有特殊处理(与 `action` 模式无关):
+
+| 实体类型        | 固定执行的动作              |
 | --------------- | --------------------------- |
 | `button.*`      | `button.press`              |
 | `script.*`      | `script.turn_on`            |
 | `scene.*`       | `scene.turn_on`             |
-| 其他(开关/灯等) | `homeassistant.toggle`      |
 
 如果你需要自定义动作(比如时间到后同时做多件事、或者调用自动化),可以配置 `actions`,配置后**优先于**实体的自动动作:
 
