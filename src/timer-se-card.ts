@@ -184,6 +184,7 @@ export class TimerSeCard extends LitElement {
   private _endAt = 0;
   private _firedAt: number | null = null;
   private _pendingFire = false; // hass 未就绪时待补触发的动作
+  private _pendingFireHandled = false; // 补触发是否已处理(仅允许一次,之后拦截)
   private _restored = false; // 是否已从 localStorage 恢复过状态(仅首次 setConfig)
   private _countdownInterval: ReturnType<typeof setInterval> | null = null;
   private _storageKey = "timer-se-card:default";
@@ -467,12 +468,41 @@ export class TimerSeCard extends LitElement {
   protected updated(changedProperties: Map<string | number | symbol, unknown>): void {
     if (changedProperties.has("hass")) {
       this._applyTheme();
-      // hass 就绪后补触发恢复时未执行的动作
-      if (this._pendingFire && this.hass) {
+      // 补触发恢复时未执行的动作:
+      // 1) 编辑器/预览模式下直接拦截,不执行任何动作
+      // 2) 仅允许一次,之后(编辑器调整配置)的 hass 更新一律丢弃
+      if (this._pendingFire && this.hass && !this._pendingFireHandled) {
+        if (this._isEditorContext()) {
+          this._pendingFire = false; // 编辑器里不执行,直接丢弃
+          return;
+        }
+        this._pendingFireHandled = true;
         this._pendingFire = false;
         this._fireActions();
+      } else if (this._pendingFire) {
+        this._pendingFire = false; // 丢弃,不再补触发
       }
     }
+  }
+
+  // 检测是否处于 HA 编辑器/预览上下文(此时不应执行任何动作)
+  private _isEditorContext(): boolean {
+    let el: HTMLElement | null = this;
+    while (el) {
+      const tag = el.tagName ? el.tagName.toLowerCase() : "";
+      if (tag === "hui-card-edit-mode" || tag === "hui-card-preview") {
+        return true;
+      }
+      if (tag === "hui-section" && el.hasAttribute("preview")) {
+        return true;
+      }
+      el = el.parentElement;
+    }
+    // 编辑器里卡片可能不在 preview 容器内,再检查 body 上是否有编辑标识
+    if (document.body && document.body.querySelector("hui-card-edit-mode")) {
+      return true;
+    }
+    return false;
   }
 
   connectedCallback(): void {
