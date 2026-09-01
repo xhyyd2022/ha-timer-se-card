@@ -82,7 +82,7 @@
 
   class TimerSeCard extends HTMLElement {
     static get version() {
-      return "1.0.0";
+      return "1.1.0";
     }
 
     static getStubConfig() {
@@ -101,6 +101,125 @@
 
     static getConfigElement() {
       return document.createElement("timer-se-card-editor");
+    }
+
+    static getConfigForm() {
+      return {
+        schema: [
+          { name: "name", selector: { text: {} } },
+          {
+            name: "entity",
+            required: true,
+            selector: {
+              entity: {
+                filter: [
+                  {
+                    domain: [
+                      "button",
+                      "switch",
+                      "input_boolean",
+                      "light",
+                      "fan",
+                      "cover",
+                      "script",
+                      "automation",
+                      "scene",
+                      "media_player",
+                      "climate",
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          {
+            name: "max_minutes",
+            selector: { number: { min: 1, max: 1440, step: 1, unit_of_measurement: "分钟" } },
+          },
+          {
+            name: "presets",
+            selector: {
+              object: {
+                multiple: true,
+                label_field: "label",
+                fields: {
+                  label: { label: "名称", selector: { text: {} } },
+                  minutes: { label: "分钟", selector: { number: { min: 1, max: 1440 } } },
+                },
+              },
+            },
+          },
+          {
+            type: "expandable",
+            name: "",
+            title: "高级选项",
+            schema: [
+              { name: "autostart", selector: { boolean: {} } },
+              {
+                type: "grid",
+                name: "",
+                schema: [
+                  { name: "size", selector: { number: { min: 160, max: 600, unit_of_measurement: "px" } } },
+                  { name: "ring_width", selector: { number: { min: 4, max: 40, unit_of_measurement: "px" } } },
+                ],
+              },
+              { name: "color", selector: { text: {} } },
+              {
+                name: "actions",
+                selector: {
+                  object: {
+                    multiple: true,
+                    label_field: "service",
+                    fields: {
+                      service: { label: "服务", selector: { text: {} } },
+                      target: { label: "目标", selector: { object: {} } },
+                      data: { label: "数据", selector: { object: {} } },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+        computeLabel: (schema) => {
+          switch (schema.name) {
+            case "name":
+              return "卡片标题";
+            case "entity":
+              return "倒计时结束后触发的实体";
+            case "max_minutes":
+              return "最大可设置时间";
+            case "presets":
+              return "预设时间";
+            case "autostart":
+              return "点击预设后立即开始";
+            case "color":
+              return "主题色(如 #ff8f00)";
+            case "size":
+              return "表盘尺寸";
+            case "ring_width":
+              return "圆环粗细";
+            case "actions":
+              return "自定义结束动作";
+            default:
+              return undefined;
+          }
+        },
+        computeHelper: (schema) => {
+          switch (schema.name) {
+            case "entity":
+              return "时间到后自动触发该实体(按钮/开关/灯等)";
+            case "presets":
+              return "每个预设 = 名称 + 分钟数,点击卡片上的标签可一键跳转";
+            case "actions":
+              return "填写后优先于实体的自动动作,例如 service 填 button.press";
+            case "color":
+              return "留空则跟随 HA 主题";
+            default:
+              return undefined;
+          }
+        },
+      };
     }
 
     constructor() {
@@ -129,13 +248,6 @@
       if (!config || typeof config !== "object") {
         throw new Error("需要提供配置对象 (config)");
       }
-      if (
-        !config.entity &&
-        !config.actions &&
-        !config.action
-      ) {
-        throw new Error("请配置 entity(时间到时触发的实体) 或 actions(动作列表)");
-      }
 
       const merged = Object.assign(
         JSON.parse(JSON.stringify(DEFAULT_CONFIG)),
@@ -150,8 +262,20 @@
       } else {
         this._maxSecsValue = DEFAULT_MAX_SECS;
       }
+      if (Array.isArray(merged.color)) {
+        merged.color =
+          "#" +
+          merged.color
+            .map((c) =>
+              Math.max(0, Math.min(255, Math.round(c)))
+                .toString(16)
+                .padStart(2, "0")
+            )
+            .join("");
+      }
 
       this._config = merged;
+      this._valid = !!(merged.entity || merged.actions || merged.action);
       this._storageKey = "timer-se-card:" + (merged.entity || "default");
       this._cacheKey = (merged.entity || "none") + "|" + (merged.actions ? JSON.stringify(merged.actions) : "") + "|" + (merged.action ? JSON.stringify(merged.action) : "");
 
@@ -563,6 +687,25 @@
         return;
       }
 
+      if (!this._valid) {
+        this.shadowRoot.innerHTML = `
+          <style>
+            .tse-hint {
+              font-family: var(--primary-font-family, "Roboto", sans-serif);
+              background: var(--ha-card-background, var(--card-background-color, #fff));
+              color: var(--secondary-text-color, #727272);
+              border-radius: var(--ha-card-border-radius, 12px);
+              box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0, 0, 0, 0.15));
+              padding: 20px;
+              font-size: 14px;
+              line-height: 1.6;
+            }
+          </style>
+          <div class="tse-hint">请配置「倒计时结束后触发的实体」或「自定义结束动作」后使用本卡片。</div>
+        `;
+        return;
+      }
+
       const color = config.color || "var(--accent-color, #ff8f00)";
       const ringWidth = config.ring_width;
       const size = config.size;
@@ -931,7 +1074,9 @@
     }
 
     connectedCallback() {
-      this._render();
+      if (this.childElementCount === 0) {
+        this._render();
+      }
     }
 
     _dispatch() {

@@ -1,6 +1,6 @@
 {
   "name": "ha-timer-se-card",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A circular rotating countdown timer card for Home Assistant Lovelace. Tap presets to set time, rotate the dial, and trigger an entity/button when the countdown finishes.",
   "main": "dist/ha-timer-se-card.js",
   "scripts": {
