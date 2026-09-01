@@ -1,6 +1,6 @@
 {
   "name": "ha-timer-se-card",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "description": "纯前端倒计时定时器卡片:滑块拖动/预设/输入设置时间,倒计时结束自动触发通用实体。派生自 ha-simple-timer (GPLv3)。",
   "main": "dist/ha-timer-se-card.js",

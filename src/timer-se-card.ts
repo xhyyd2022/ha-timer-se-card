@@ -37,14 +37,15 @@ interface HomeAssistant {
   };
 }
 
-const CARD_VERSION = "1.4.0";
+const CARD_VERSION = "1.5.0";
 const TOTAL_BLOCKS = 16; // 进度块条分段数
-const DEFAULT_MAX_MINUTES = 60;
-const DEFAULT_PRESETS = [5, 10, 30];
+const DEFAULT_MAX_MINUTES = 120; // 与上游一致
+const DEFAULT_PRESETS = [15, 30, 60, 90, 120, 150]; // 与上游一致
 
 interface TimerButton {
   value: number; // 分钟(或秒)
   label: string;
+  unit: string; // "min" | "sec" | "hr" | "day"
 }
 
 interface TimerSeCardConfig {
@@ -52,9 +53,13 @@ interface TimerSeCardConfig {
   entity?: string;
   action?: string; // "toggle" | "on" | "off" | 自定义 service 对象
   actions?: Array<{ service: string; target?: Record<string, unknown>; data?: Record<string, unknown> }>;
-  name?: string;
+  card_title?: string; // 卡片标题(与上游一致)
   presets?: (number | string | { minutes?: number; seconds?: number; label?: string })[];
-  slider_max?: number;
+  slider_max?: number; // 滑块最大值(上游默认 120)
+  slider_unit?: string; // "min" | "sec" | "hr" | "day"(上游默认 min)
+  countdown_display?: string; // "countdown" | "progress" | "both"(上游默认 countdown)
+  hide_slider?: boolean; // 隐藏滑块
+  reverse_mode?: boolean; // 反转模式(延迟启动)
   autostart?: boolean;
   color?: string;
   event_type?: string; // 倒计时结束后向 HA 后端触发的事件类型(供自动化监听)
@@ -119,6 +124,7 @@ type PresetInput = number | string | { minutes?: number; seconds?: number; label
 function normalizePreset(p: PresetInput): TimerButton | null {
   let value: number;
   let label: string;
+  let unit = "min";
   if (typeof p === "number") {
     value = p;
     label = p + "分";
@@ -128,6 +134,7 @@ function normalizePreset(p: PresetInput): TimerButton | null {
     const mins = secs / 60;
     value = Number.isInteger(mins) ? mins : secs;
     label = p;
+    unit = /s\s*$/.test(p.trim()) ? "sec" : /h\s*$/.test(p.trim()) ? "hr" : "min";
   } else if (p && typeof p === "object") {
     if (typeof p.minutes === "number") {
       value = p.minutes;
@@ -135,13 +142,14 @@ function normalizePreset(p: PresetInput): TimerButton | null {
     } else if (typeof p.seconds === "number") {
       value = p.seconds;
       label = p.label || p.seconds + "秒";
+      unit = "sec";
     } else {
       return null;
     }
   } else {
     return null;
   }
-  return { value, label };
+  return { value, label, unit };
 }
 
 // 根据实体域生成默认结束动作
@@ -186,10 +194,12 @@ export class TimerSeCard extends LitElement {
   static getStubConfig(): TimerSeCardConfig {
     return {
       entity: "",
-      name: "定时器",
+      card_title: "定时器",
       action: "toggle",
       presets: [...DEFAULT_PRESETS],
       slider_max: DEFAULT_MAX_MINUTES,
+      slider_unit: "min",
+      countdown_display: "countdown",
       autostart: true,
     };
   }
@@ -197,7 +207,7 @@ export class TimerSeCard extends LitElement {
   static getConfigForm() {
     return {
       schema: [
-        { name: "name", selector: { text: {} } },
+        { name: "card_title", selector: { text: {} } },
         {
           name: "entity",
           required: true,
@@ -219,10 +229,41 @@ export class TimerSeCard extends LitElement {
           },
         },
         {
-          name: "slider_max",
+          name: "countdown_display",
           selector: {
-            number: { min: 1, max: 1440, step: 1, unit_of_measurement: "分钟" },
+            select: {
+              options: [
+                { value: "countdown", label: "仅倒计时" },
+                { value: "progress", label: "仅进度条" },
+                { value: "both", label: "倒计时 + 进度条" },
+              ],
+              mode: "dropdown",
+            },
           },
+        },
+        {
+          type: "grid",
+          name: "",
+          schema: [
+            {
+              name: "slider_max",
+              selector: { number: { min: 1, max: 9999, step: 1, mode: "box" } },
+            },
+            {
+              name: "slider_unit",
+              selector: {
+                select: {
+                  options: [
+                    { value: "sec", label: "秒(s)" },
+                    { value: "min", label: "分钟(m)" },
+                    { value: "hr", label: "小时(h)" },
+                    { value: "day", label: "天(d)" },
+                  ],
+                  mode: "dropdown",
+                },
+              },
+            },
+          ],
         },
         {
           name: "presets",
@@ -231,7 +272,7 @@ export class TimerSeCard extends LitElement {
               multiple: true,
               label_field: "minutes",
               fields: {
-                minutes: { label: "分钟", selector: { number: { min: 1, max: 1440 } } },
+                minutes: { label: "分钟", selector: { number: { min: 1, max: 9999 } } },
               },
             },
           },
@@ -241,6 +282,8 @@ export class TimerSeCard extends LitElement {
           name: "",
           title: "高级选项",
           schema: [
+            { name: "hide_slider", selector: { boolean: {} } },
+            { name: "reverse_mode", selector: { boolean: {} } },
             { name: "autostart", selector: { boolean: {} } },
             { name: "color", selector: { text: {} } },
             { name: "event_type", selector: { text: {} } },
@@ -269,16 +312,24 @@ export class TimerSeCard extends LitElement {
       ],
       computeLabel: (schema: any) => {
         switch (schema.name) {
-          case "name":
+          case "card_title":
             return "卡片标题";
           case "entity":
             return "倒计时结束后触发的实体";
           case "action":
             return "倒计时结束后的动作";
+          case "countdown_display":
+            return "时间显示方式";
           case "slider_max":
-            return "滑块最大时间";
+            return "滑块最大值";
+          case "slider_unit":
+            return "滑块单位";
           case "presets":
             return "预设时间";
+          case "hide_slider":
+            return "隐藏滑块";
+          case "reverse_mode":
+            return "反转模式(延迟启动)";
           case "autostart":
             return "点击预设后立即开始";
           case "color":
@@ -299,10 +350,18 @@ export class TimerSeCard extends LitElement {
             return "时间到后自动触发该实体(任意类型,不限制设备)";
           case "action":
             return "反转=切换开/关,也可固定为开启或关闭;按钮/脚本/场景类实体仍按各自动作触发";
+          case "countdown_display":
+            return "选择倒计时数字、进度条或两者同时显示";
           case "slider_max":
             return "拖动滑块可在该范围内设置时间";
+          case "slider_unit":
+            return "滑块数值的单位(秒/分钟/小时/天)";
           case "presets":
             return "仅需填写分钟数,标签会自动生成,点击卡片上的标签可一键跳转";
+          case "hide_slider":
+            return "隐藏滑块,只用预设按钮和输入框设置时间";
+          case "reverse_mode":
+            return "反转模式:倒计时结束后开启实体(延迟启动),而不是关闭";
           case "actions":
             return "填写后优先于实体的自动动作,例如 service 填 button.press";
           case "color":
@@ -324,6 +383,10 @@ export class TimerSeCard extends LitElement {
       action: "toggle",
       presets: [...DEFAULT_PRESETS],
       slider_max: DEFAULT_MAX_MINUTES,
+      slider_unit: "min",
+      countdown_display: "countdown",
+      hide_slider: false,
+      reverse_mode: false,
       autostart: true,
       color: undefined,
       ...config,
@@ -336,6 +399,12 @@ export class TimerSeCard extends LitElement {
       }
     }
     if (!(merged.slider_max! > 0)) merged.slider_max = DEFAULT_MAX_MINUTES;
+    if (!["sec", "min", "hr", "day"].includes(merged.slider_unit || "")) {
+      merged.slider_unit = "min";
+    }
+    if (!["countdown", "progress", "both"].includes(merged.countdown_display || "")) {
+      merged.countdown_display = "countdown";
+    }
 
     this._presets = (merged.presets || DEFAULT_PRESETS)
       .map(normalizePreset)
@@ -562,6 +631,21 @@ export class TimerSeCard extends LitElement {
 
   /* ---------------- input ---------------- */
 
+  // 单位换算(与上游一致:滑块数值 × 单位 → 秒)
+  private _unitToSeconds(unit: string, value: number): number {
+    switch (unit) {
+      case "sec":
+        return value;
+      case "hr":
+        return value * 3600;
+      case "day":
+        return value * 86400;
+      case "min":
+      default:
+        return value * 60;
+    }
+  }
+
   private _setFromInput(): void {
     const input = this.shadowRoot?.querySelector<HTMLInputElement>(".tse-input");
     if (!input) return;
@@ -578,7 +662,8 @@ export class TimerSeCard extends LitElement {
   private _handleSliderChange(event: Event): void {
     const slider = event.target as HTMLInputElement;
     this._sliderValue = parseInt(slider.value, 10) || 0;
-    this._setTime(this._sliderValue * 60);
+    const unit = (this._config.slider_unit as string) || "min";
+    this._setTime(this._unitToSeconds(unit, this._sliderValue));
   }
 
   /* ---------------- actions ---------------- */
@@ -592,7 +677,12 @@ export class TimerSeCard extends LitElement {
       return [config.action as any];
     }
     if (config.entity) {
-      const mode = typeof config.action === "string" ? config.action : "toggle";
+      let mode = typeof config.action === "string" ? config.action : "toggle";
+      // 反转模式(延迟启动):结束时开启实体而非关闭
+      if (config.reverse_mode) {
+        if (mode === "off") mode = "on";
+        else if (mode === "on") mode = "off";
+      }
       return [defaultActionFor(config.entity, mode)];
     }
     return [];
@@ -699,9 +789,62 @@ export class TimerSeCard extends LitElement {
 
   /* ---------------- render ---------------- */
 
+  // 默认预览(参考上游 _renderPreview,去掉集成相关的 daily usage 与电源按钮)
+  private _renderPreview() {
+    const cfg = this._config || {};
+    const previewButtons = [15, 30, 60, 90, 120];
+    const mode = (cfg.countdown_display as string) || "countdown";
+    const showCountdown = mode !== "progress";
+    const showProgress = mode !== "countdown";
+    const previewActiveBlocks = Math.ceil(TOTAL_BLOCKS * 0.65);
+    const unit = (cfg.slider_unit as string) || "min";
+    const unitLabel =
+      unit === "sec" ? "秒" : unit === "hr" ? "小时" : unit === "day" ? "天" : "分钟";
+    const sliderMax = (cfg.slider_max as number) || DEFAULT_MAX_MINUTES;
+
+    const blocks = Array.from({ length: TOTAL_BLOCKS }, (_, i) =>
+      html`<div class="tse-block ${i < previewActiveBlocks ? "is-on" : ""}"></div>`
+    );
+    const presetBtns = previewButtons.map(
+      (m) => html`<button class="tse-preset">${m} 分</button>`
+    );
+
+    return html`
+      <ha-card class="tse-card tse-preview">
+        <div class="tse-header">
+          <span class="tse-title">${cfg.card_title || "定时器"}</span>
+          <span class="tse-status">待机</span>
+        </div>
+
+        ${showCountdown
+          ? html`<div class="tse-countdown">
+              <div class="tse-time">00:10:00</div>
+            </div>`
+          : ""}
+
+        ${showProgress
+          ? html`<div class="tse-progress-section">
+              <div class="tse-percent">65%</div>
+              <div class="tse-blocks">${blocks}</div>
+            </div>`
+          : ""}
+
+        <div class="tse-slider-row">
+          <input class="tse-slider" type="range" min="0" step="1" max="${sliderMax}" value="10" disabled />
+          <div class="tse-slider-right">
+            <span class="tse-slider-label">10 ${unitLabel}</span>
+            <div class="tse-control-btn"><ha-icon icon="mdi:play"></ha-icon></div>
+          </div>
+        </div>
+
+        <div class="tse-presets">${presetBtns}</div>
+      </ha-card>
+    `;
+  }
+
   protected render() {
     if (!this._config || !this._valid) {
-      return html`<div class="tse-hint">请配置「结束时要触发的实体」或「结束事件类型」或「自定义结束动作」后使用本卡片。</div>`;
+      return this._renderPreview();
     }
 
     const config = this._config;
@@ -709,12 +852,23 @@ export class TimerSeCard extends LitElement {
     const entityName = entity
       ? (entity.attributes.friendly_name as string) || config.entity
       : null;
-    const headerTitle = config.name || entityName || "定时器";
+    const headerTitle = config.card_title || entityName || "定时器";
     const isOn = this._isEntityOn();
     const isActive = this._state === "running";
 
     const timeText = this._state === "finished" ? "00:00:00" : formatTime(this._remainingSeconds);
     const activeBlocks = this._activeBlocks();
+    // 剩余百分比(方形进度块上方/内部显示)
+    const percent =
+      this._totalSeconds > 0
+        ? Math.round(
+            Math.max(0, Math.min(1, this._remainingSeconds / this._totalSeconds)) * 100
+          )
+        : 0;
+
+    const displayMode = (config.countdown_display as string) || "countdown";
+    const showCountdown = displayMode !== "progress";
+    const showProgress = displayMode !== "countdown";
 
     const blocks = Array.from({ length: TOTAL_BLOCKS }, (_, i) => {
       const on = i < activeBlocks;
@@ -723,15 +877,20 @@ export class TimerSeCard extends LitElement {
     });
 
     const presets = this._presets.map((p) => {
+      const seconds = this._unitToSeconds(p.unit, p.value);
       const active =
         this._state === "running" &&
         this._totalSeconds > 0 &&
-        Math.abs(this._totalSeconds - p.value * 60) < 1.5;
-      return html`<button class="tse-preset ${active ? "is-active" : ""}" @click=${() => this._setTime(p.value * 60)}>${p.label}</button>`;
+        Math.abs(this._totalSeconds - seconds) < 1.5;
+      return html`<button class="tse-preset ${active ? "is-active" : ""}" @click=${() => this._setTime(seconds)}>${p.label}</button>`;
     });
 
-    const maxMinutes = (config.slider_max as number) || DEFAULT_MAX_MINUTES;
-    const sliderVal = Math.min(this._sliderValue, maxMinutes);
+    const unit = (config.slider_unit as string) || "min";
+    const unitLabel =
+      unit === "sec" ? "秒" : unit === "hr" ? "小时" : unit === "day" ? "天" : "分钟";
+    const maxValue = (config.slider_max as number) || DEFAULT_MAX_MINUTES;
+    const sliderVal = Math.min(this._sliderValue, maxValue);
+    const showSlider = !config.hide_slider;
     const showReset = this._state !== "idle" || this._totalSeconds > 0;
 
     return html`
@@ -744,21 +903,30 @@ export class TimerSeCard extends LitElement {
           <span class="tse-status">${this._statusText()}</span>
         </div>
 
-        <div class="tse-countdown ${isActive ? "is-active" : ""}">
-          <div class="tse-time">${timeText}</div>
-        </div>
+        ${showCountdown
+          ? html`<div class="tse-countdown ${isActive ? "is-active" : ""}">
+              <div class="tse-time">${timeText}</div>
+            </div>`
+          : ""}
 
-        <div class="tse-blocks">${blocks}</div>
+        ${showProgress
+          ? html`<div class="tse-progress-section">
+              <div class="tse-percent">${percent}%</div>
+              <div class="tse-blocks">${blocks}</div>
+            </div>`
+          : ""}
 
-        <div class="tse-slider-row">
-          <input class="tse-slider" type="range" min="0" step="1" max="${maxMinutes}" value="${sliderVal}" @input=${this._handleSliderChange} />
-          <div class="tse-slider-right">
-            <span class="tse-slider-label">${sliderVal} 分钟</span>
-            <div class="tse-control-btn ${isActive ? "is-active" : ""}" @click=${() => this._toggle()}>
-              <ha-icon icon="${this._controlIcon()}"></ha-icon>
-            </div>
-          </div>
-        </div>
+        ${showSlider
+          ? html`<div class="tse-slider-row">
+              <input class="tse-slider" type="range" min="0" step="1" max="${maxValue}" value="${sliderVal}" @input=${this._handleSliderChange} />
+              <div class="tse-slider-right">
+                <span class="tse-slider-label">${sliderVal} ${unitLabel}</span>
+                <div class="tse-control-btn ${isActive ? "is-active" : ""}" @click=${() => this._toggle()}>
+                  <ha-icon icon="${this._controlIcon()}"></ha-icon>
+                </div>
+              </div>
+            </div>`
+          : ""}
 
         ${presets.length ? html`<div class="tse-presets">${presets}</div>` : ""}
 
@@ -797,16 +965,6 @@ export class TimerSeCard extends LitElement {
       color: var(--primary-text-color, #e1e1e1);
       border-color: var(--ha-card-border-color, var(--divider-color, #3a3a3a));
     }
-    .tse-hint {
-      font-family: var(--primary-font-family, "Roboto", sans-serif);
-      background: var(--ha-card-background, var(--card-background-color, #fff));
-      color: var(--primary-text-color, #1c1c1e);
-      border-radius: var(--ha-card-border-radius, 12px);
-      border: 1px solid var(--ha-card-border-color, var(--divider-color, #e0e0e0));
-      padding: 20px;
-      font-size: 14px;
-      line-height: 1.6;
-    }
     .tse-header {
       display: flex;
       align-items: center;
@@ -814,8 +972,13 @@ export class TimerSeCard extends LitElement {
       min-height: 20px;
     }
     .tse-title {
-      font-size: 16px;
+      font-family: "Roboto", sans-serif;
       font-weight: 500;
+      font-size: 1.7rem;
+      color: rgba(160, 160, 160, 0.7);
+      text-align: left;
+      margin: 0;
+      padding: 0 8px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -843,16 +1006,29 @@ export class TimerSeCard extends LitElement {
       text-align: center;
     }
     .tse-time {
-      font-size: clamp(2rem, 12vw, 3.2rem);
-      font-weight: 700;
+      font-size: clamp(1.8rem, 10vw, 3.5rem);
+      font-weight: bold;
       font-variant-numeric: tabular-nums;
-      letter-spacing: 1px;
       line-height: 1.2;
+      min-height: 3.5rem;
+      padding: 4px 44px;
+      box-sizing: border-box;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       color: var(--primary-text-color, #1c1c1e);
     }
     .tse-countdown.is-active .tse-time {
       color: var(--tse-accent);
+    }
+    .tse-progress-section {
+      text-align: center;
+    }
+    .tse-percent {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--secondary-text-color, #727272);
+      margin-bottom: 4px;
     }
     .tse-blocks {
       display: flex;
@@ -863,14 +1039,15 @@ export class TimerSeCard extends LitElement {
       max-width: 280px;
       margin: 0 auto;
       box-sizing: border-box;
+      padding: 0 8px;
     }
     .tse-block {
       flex: 1 1 0;
       min-width: 0;
-      height: 16px;
+      height: 18px;
       border-radius: 4px;
       background-color: var(--divider-color, rgba(160, 160, 160, 0.25));
-      opacity: 0.5;
+      opacity: 0.55;
       transition: background-color 0.4s linear, opacity 0.4s linear;
     }
     .tse-block.is-on {
@@ -901,8 +1078,8 @@ export class TimerSeCard extends LitElement {
     .tse-slider::-webkit-slider-thumb {
       -webkit-appearance: none;
       appearance: none;
-      width: 26px;
-      height: 26px;
+      width: 30px;
+      height: 30px;
       border-radius: 50%;
       background: var(--tse-accent);
       cursor: pointer;
@@ -914,8 +1091,8 @@ export class TimerSeCard extends LitElement {
       transform: scale(1.08);
     }
     .tse-slider::-moz-range-thumb {
-      width: 26px;
-      height: 26px;
+      width: 30px;
+      height: 30px;
       border-radius: 50%;
       background: var(--tse-accent);
       cursor: pointer;
@@ -936,9 +1113,9 @@ export class TimerSeCard extends LitElement {
       text-align: center;
     }
     .tse-control-btn {
-      width: 46px;
-      height: 40px;
-      border-radius: 8px;
+      width: 50px;
+      height: 38px;
+      border-radius: 6px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -962,11 +1139,11 @@ export class TimerSeCard extends LitElement {
       justify-content: center;
     }
     .tse-preset {
-      min-width: 64px;
+      width: 80px;
       height: 38px;
-      padding: 0 12px;
+      padding: 0;
       border: none;
-      border-radius: 8px;
+      border-radius: 6px;
       background-color: var(--secondary-background-color, rgba(128, 128, 128, 0.2));
       color: var(--primary-text-color, #1c1c1e);
       font-size: 14px;
