@@ -2,12 +2,12 @@
 // Timer SE Card 配置编辑器(参考上游 ha-simple-timer 的 timer-card-editor.ts 精简)
 //
 // 预设时间输入方式与上游一致:chips 标签展示 + 自由文本输入框 + ADD 按钮,
-// 支持秒(s)/分钟(m)/小时(h)/天(d),纯数字默认为分钟,可删除、去重、排序。
+// 支持秒(s)/分钟(m)/小时(h),纯数字默认为分钟,可删除、去重、排序。
 
 import { LitElement, html, css } from "lit";
 import { property, state } from "lit/decorators.js";
 
-const DEFAULT_PRESETS = [15, 30, 60, 90, 120, 150];
+const DEFAULT_PRESETS = [15, 30, 60];
 
 interface TimerSeCardConfig {
   type?: string;
@@ -29,10 +29,10 @@ interface TimerSeCardConfig {
 }
 
 // 校验并规范化预设值(与上游 _getValidatedTimerButtons 一致):
-// 纯数字 -> number(分钟);带单位 -> string,如 "30s"、"1.5h"、"1d"
+// 纯数字 -> number(分钟);带单位 -> string,如 "30s"、"1.5h"
 function validateTimerButton(val: string): number | string | null {
   const strVal = String(val).trim().toLowerCase();
-  const match = strVal.match(/^(\d+(?:\.\d+)?)\s*(s|sec|seconds|m|min|minutes|h|hr|hours|d|day|days)?$/);
+  const match = strVal.match(/^(\d+(?:\.\d+)?)\s*(s|sec|seconds|m|min|minutes|h|hr|hours)?$/);
   if (!match) return null;
   const numVal = parseFloat(match[1]);
   if (numVal <= 0 || numVal > 9999) return null;
@@ -42,7 +42,6 @@ function validateTimerButton(val: string): number | string | null {
     s: "s", sec: "s", seconds: "s",
     m: "m", min: "m", minutes: "m",
     h: "h", hr: "h", hours: "h",
-    d: "d", day: "d", days: "d",
   };
   return numVal + unitMap[unitStr];
 }
@@ -237,7 +236,6 @@ export class TimerCardEditor extends LitElement {
                   { value: "sec", label: "秒(s)" },
                   { value: "min", label: "分钟(m)" },
                   { value: "hr", label: "小时(h)" },
-                  { value: "day", label: "天(d)" },
                 ],
               },
             },
@@ -282,7 +280,7 @@ export class TimerCardEditor extends LitElement {
     if (!val) return;
     const validated = validateTimerButton(val);
     if (validated === null) {
-      alert("无效的预设时间格式。示例:30s、10、1.5h、1d(纯数字为分钟)");
+      alert("无效的预设时间格式。示例:30s、10、1.5h(纯数字为分钟)");
       return;
     }
     const current = Array.isArray(this._config.timer_buttons)
@@ -312,7 +310,11 @@ export class TimerCardEditor extends LitElement {
 
   private _formChanged(ev: CustomEvent): void {
     ev.stopPropagation();
-    const value = { ...(ev.detail?.value || {}) };
+    const value: Record<string, unknown> = { ...(ev.detail?.value || {}) };
+    // 删除值为 undefined 的键,避免 ha-form 回传时覆盖已有配置(如 timer_buttons)
+    Object.keys(value).forEach((k) => {
+      if (value[k] === undefined) delete value[k];
+    });
     this._updateConfig(value as Partial<TimerSeCardConfig>);
   }
 
@@ -357,7 +359,7 @@ export class TimerCardEditor extends LitElement {
             />
             <div class="add-btn" @click=${this._addTimerButton} role="button">添加</div>
           </div>
-          <div class="helper-text">支持秒(s)、分钟(m)、小时(h)、天(d)。示例:30s、10、1.5h、1d。</div>
+          <div class="helper-text">支持秒(s)、分钟(m)、小时(h)。示例:30s、10、1.5h。</div>
           ${!buttons.length && cfg.hide_slider
             ? html`<div class="info-text">ℹ️ 没有预设且滑块已隐藏,卡片将无法设置时长。</div>`
             : ""}
