@@ -20,7 +20,6 @@ interface TimerSeCardConfig {
   slider_unit?: string;
   countdown_display?: string;
   hide_slider?: boolean;
-  reverse_mode?: boolean;
   autostart?: boolean;
   color?: string;
   event_type?: string;
@@ -165,7 +164,6 @@ export class TimerCardEditor extends LitElement {
       slider_unit: "滑块单位",
       hide_slider: "隐藏滑块",
       show_manual_input: "显示手动设置输入框",
-      reverse_mode: "反转模式(延迟启动)",
       autostart: "点击预设后立即开始",
       color: "主题色(如 #ff8f00)",
       event_type: "结束事件类型(可选)",
@@ -178,13 +176,12 @@ export class TimerCardEditor extends LitElement {
   private _computeHelper = (schema: any): string => {
     const helpers: Record<string, string> = {
       entity: "时间到后自动触发该实体(任意类型,不限制设备)",
-      action: "反转=切换开/关,也可固定为开启或关闭",
+      action: "切换=开↔关互换,也可固定为开启或关闭",
       countdown_display: "选择倒计时数字、方形进度块或两者同时显示",
       slider_max: "拖动滑块可在该范围内设置时间",
       slider_unit: "滑块数值的单位(秒/分钟/小时/天)",
       hide_slider: "隐藏滑块,只用预设按钮和输入框设置时间",
       show_manual_input: "显示底部的输入框与设置/重置按钮(手动输入时间,默认关闭)",
-      reverse_mode: "反转模式:倒计时结束后开启实体(延迟启动),而不是关闭",
       event_type: "倒计时结束后向 HA 后端触发该事件(如 timer_finished),自动化可用 event trigger 监听",
       event_data: "事件附带数据,例如 { \"timer_id\": \"123456\" }",
       color: "留空则跟随 HA 主题",
@@ -202,7 +199,7 @@ export class TimerCardEditor extends LitElement {
           select: {
             mode: "dropdown",
             options: [
-              { value: "toggle", label: "反转(toggle):开↔关" },
+              { value: "toggle", label: "切换(toggle):开↔关" },
               { value: "on", label: "开启(turn_on)" },
               { value: "off", label: "关闭(turn_off)" },
             ],
@@ -216,8 +213,8 @@ export class TimerCardEditor extends LitElement {
             mode: "dropdown",
             options: [
               { value: "countdown", label: "仅倒计时" },
-              { value: "progress", label: "仅方形进度条" },
-              { value: "both", label: "倒计时 + 进度条" },
+              { value: "progress", label: "仅方形进度块" },
+              { value: "both", label: "倒计时 + 方形进度块" },
             ],
           },
         },
@@ -249,7 +246,6 @@ export class TimerCardEditor extends LitElement {
     return [
       { name: "hide_slider", selector: { boolean: {} } },
       { name: "show_manual_input", selector: { boolean: {} } },
-      { name: "reverse_mode", selector: { boolean: {} } },
       { name: "autostart", selector: { boolean: {} } },
       { name: "color", selector: { text: {} } },
       { name: "event_type", selector: { text: {} } },

@@ -36,7 +36,7 @@ type: module
 type: custom:timer-se-card
 entity: button.fan_toggle        # 必填:倒计时结束后要触发的实体(任意类型,不限制)
 action: toggle                   # 可选:倒计时结束后的动作,默认 toggle
-                                 #   toggle = 反转(开↔关) / on = 开启 / off = 关闭
+                                 #   toggle = 切换(开↔关) / on = 开启 / off = 关闭
 card_title: 睡前关风扇            # 可选:卡片标题
 presets:                         # 可选:预设时间(纯数字=分钟,支持 "30s"/"1h" 单位)
   - 15
@@ -48,7 +48,6 @@ slider_unit: min                 # 可选:滑块单位 min/sec/hr/day,默认 min
 countdown_display: both          # 可选:时间显示方式 countdown(仅数字)/ progress(仅方块)/ both
 hide_slider: false               # 可选:隐藏滑块(只用预设/输入框)
 show_manual_input: false         # 可选:是否显示底部手动设置输入框(输入+设置+重置),默认关闭
-reverse_mode: false              # 可选:反转模式(延迟启动,结束时开启实体)
 autostart: true                  # 可选:点击预设后是否立即开始,默认 true
 color: "#ff8f00"                 # 可选:主题色,默认跟随 HA 主题
 ```
@@ -108,7 +107,7 @@ actions:
 
 | `action` 值  | 含义               | 执行的服务              |
 | ------------ | ------------------ | ----------------------- |
-| `toggle`(默认) | 反转(开↔关)       | `homeassistant.toggle`  |
+| `toggle`(默认) | 切换(开↔关)       | `homeassistant.toggle`  |
 | `on`         | 开启               | `homeassistant.turn_on` |
 | `off`        | 关闭               | `homeassistant.turn_off`|
 
@@ -143,7 +142,7 @@ actions:
 - **输入框**:输入 `5`/`30s`/`1h 30m` 等直接设置时间
 - **控制按钮**:开始 / 暂停 / 继续 / 重置
 - **方形进度块**:按剩余比例点亮(可显示百分比),`countdown_display` 可切换 数字/方块/两者
-- **倒计时结束**:自动触发配置的实体(反转模式则为开启),或触发后端事件供自动化使用
+- **倒计时结束**:自动触发配置的实体(切换/开启/关闭),或触发后端事件供自动化使用
 
 ## 状态持久化
 

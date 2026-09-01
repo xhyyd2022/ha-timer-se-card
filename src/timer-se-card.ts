@@ -7,7 +7,7 @@
 //
 // 相对上游的主要精简:
 //   - 移除对 simple_timer 集成的依赖(不再调用 start_timer/cancel_timer 等服务)
-//   - 实体改为通用实体:倒计时结束时仅触发配置的实体(反转/开启/关闭或自定义动作)
+//   - 实体改为通用实体:倒计时结束时仅触发配置的实体(切换/开启/关闭或自定义动作)
 //   - 删除冗余功能:每日运行时长(daily usage)、定时面板(schedule)、看门狗(watchdog)、
 //     独立电源按钮、服务器时间同步、长按重置等
 //   - 仅保留:倒计时显示、进度块条、滑块拖动、预设按钮、输入框与控制按钮
@@ -61,7 +61,6 @@ interface TimerSeCardConfig {
   countdown_display?: string; // "countdown" | "progress" | "both"(上游默认 countdown)
   hide_slider?: boolean; // 隐藏滑块
   show_manual_input?: boolean; // 是否显示底部手动设置时间输入行(默认 false)
-  reverse_mode?: boolean; // 反转模式(延迟启动)
   autostart?: boolean;
   color?: string;
   event_type?: string; // 倒计时结束后向 HA 后端触发的事件类型(供自动化监听)
@@ -227,7 +226,7 @@ export class TimerSeCard extends LitElement {
           selector: {
             select: {
               options: [
-                { value: "toggle", label: "反转(toggle):开↔关" },
+                { value: "toggle", label: "切换(toggle):开↔关" },
                 { value: "on", label: "开启(turn_on)" },
                 { value: "off", label: "关闭(turn_off)" },
               ],
@@ -241,8 +240,8 @@ export class TimerSeCard extends LitElement {
             select: {
               options: [
                 { value: "countdown", label: "仅倒计时" },
-                { value: "progress", label: "仅进度条" },
-                { value: "both", label: "倒计时 + 进度条" },
+                { value: "progress", label: "仅方形进度块" },
+                { value: "both", label: "倒计时 + 方形进度块" },
               ],
               mode: "dropdown",
             },
@@ -288,9 +287,8 @@ export class TimerSeCard extends LitElement {
           name: "",
           title: "高级选项",
           schema: [
-            { name: "hide_slider", selector: { boolean: {} } },
-            { name: "reverse_mode", selector: { boolean: {} } },
-            { name: "autostart", selector: { boolean: {} } },
+          { name: "hide_slider", selector: { boolean: {} } },
+          { name: "autostart", selector: { boolean: {} } },
             { name: "color", selector: { text: {} } },
             { name: "event_type", selector: { text: {} } },
             {
@@ -334,8 +332,6 @@ export class TimerSeCard extends LitElement {
             return "预设时间";
           case "hide_slider":
             return "隐藏滑块";
-          case "reverse_mode":
-            return "反转模式(延迟启动)";
           case "autostart":
             return "点击预设后立即开始";
           case "color":
@@ -355,19 +351,17 @@ export class TimerSeCard extends LitElement {
           case "entity":
             return "时间到后自动触发该实体(任意类型,不限制设备)";
           case "action":
-            return "反转=切换开/关,也可固定为开启或关闭;按钮/脚本/场景类实体仍按各自动作触发";
+            return "切换=开↔关互换,也可固定为开启或关闭;按钮/脚本/场景类实体仍按各自动作触发";
           case "countdown_display":
-            return "选择倒计时数字、进度条或两者同时显示";
+            return "选择倒计时数字、方形进度块或两者同时显示";
           case "slider_max":
             return "拖动滑块可在该范围内设置时间";
           case "slider_unit":
             return "滑块数值的单位(秒/分钟/小时)";
           case "presets":
-            return "仅需填写分钟数,标签会自动生成,点击卡片上的标签可一键跳转";
+            return "在编辑器中用 chips 添加预设:纯数字为分钟,支持 30s、1h 等单位";
           case "hide_slider":
             return "隐藏滑块,只用预设按钮和输入框设置时间";
-          case "reverse_mode":
-            return "反转模式:倒计时结束后开启实体(延迟启动),而不是关闭";
           case "actions":
             return "填写后优先于实体的自动动作,例如 service 填 button.press";
           case "color":
@@ -393,7 +387,6 @@ export class TimerSeCard extends LitElement {
       countdown_display: "countdown",
       hide_slider: false,
       show_manual_input: false,
-      reverse_mode: false,
       autostart: true,
       color: undefined,
       ...config,
@@ -686,11 +679,6 @@ export class TimerSeCard extends LitElement {
     }
     if (config.entity) {
       let mode = typeof config.action === "string" ? config.action : "toggle";
-      // 反转模式(延迟启动):结束时开启实体而非关闭
-      if (config.reverse_mode) {
-        if (mode === "off") mode = "on";
-        else if (mode === "on") mode = "off";
-      }
       return [defaultActionFor(config.entity, mode)];
     }
     return [];
