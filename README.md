@@ -1,0 +1,107 @@
+# Timer SE Card
+
+一个为 Home Assistant 仪表盘(Lovelace)设计的**圆形旋转倒计时定时器卡片**。
+
+- 🎡 **圆形旋转表盘**:在最大时间范围内拖动圆环即可设定时间,松手自动开始倒计时
+- ⏰ **预设时间一键跳转**:内置几个固定时间点,点击标签立刻跳转到对应时间并开始倒计时
+- 🔔 **倒计时结束触发实体**:时间到后自动按下你指定的按钮/开关/灯等实体
+- ⚙️ 支持最大时间限制、自定义主题色、深浅色主题自适应
+- ✏️ 提供**图形化配置编辑器**(添加卡片时可直接在 UI 中编辑)
+
+## 安装(HACS)
+
+1. 在 HACS 中点击「…」→ **自定义存储库**,添加:
+
+   - 存储库地址:`https://github.com/xhyyd2022/ha-timer-se-card`
+   - 类别:**Dashboard / Lovelace 前端插件**
+
+2. 点击 **下载**,重启 Home Assistant 前端(或刷新页面)。
+3. 在仪表盘编辑模式添加卡片 → 选择 **Timer SE Card**。
+
+> 也可以使用 [My Home Assistant](https://my.home-assistant.io/redirect/hacs_repository/?owner=xhyyd2022&repository=ha-timer-se-card) 一键添加。
+
+## 使用方式
+
+### 手动安装(不使用 HACS)
+
+将 `dist/ha-timer-se-card.js` 放到 `<config>/www/` 下,然后在仪表盘资源中添加:
+
+```yaml
+url: /local/ha-timer-se-card.js
+type: module
+```
+
+## 卡片配置
+
+```yaml
+type: custom:timer-se-card
+entity: button.fan_toggle        # 必填:倒计时结束后要触发的实体(按钮/开关/灯/脚本等)
+name: 睡前关风扇                  # 可选:卡片标题
+presets:                         # 可选:预设时间(点击一键跳转)
+  - label: 5分
+    minutes: 5
+  - label: 10分
+    minutes: 10
+  - label: 30分
+    minutes: 30
+  - label: 1小时
+    minutes: 60
+max_minutes: 60                  # 可选:表盘最大可旋转时间(分钟),默认 60
+autostart: true                  # 可选:点击预设后是否立即开始,默认 true
+color: "#ff8f00"                 # 可选:主题色,默认跟随 HA 主题
+ring_width: 14                   # 可选:圆环粗细(px),默认 14
+size: 260                        # 可选:表盘尺寸(px),默认 260
+```
+
+### 结束动作(actions)
+
+默认情况下,卡片会根据实体类型自动触发:
+
+| 实体类型        | 自动执行的动作              |
+| --------------- | --------------------------- |
+| `button.*`      | `button.press`              |
+| `script.*`      | `script.turn_on`            |
+| `scene.*`       | `scene.turn_on`             |
+| 其他(开关/灯等) | `homeassistant.toggle`      |
+
+如果你需要自定义动作(比如时间到后同时做多件事、或者调用自动化),可以配置 `actions`,配置后**优先于**实体的自动动作:
+
+```yaml
+type: custom:timer-se-card
+entity: button.fan_toggle
+actions:
+  - service: button.press
+    target:
+      entity_id: button.fan_toggle
+  - service: notify.mobile_app_phone
+    data:
+      message: 定时时间到,已关闭风扇
+```
+
+> 倒计时结束时会额外在页面上派发一个 DOM 事件 `timer-se-card-finished`,方便前端调试/联动。
+
+## 交互说明
+
+- **拖动圆环**:顺时针增加时间,逆时针减少;在 `max_minutes` 范围内
+- **点击预设标签**:立即跳转到该时间并(默认)开始倒计时
+- **点击圆心**:开始 / 暂停 / 继续 / 重置
+- **倒计时结束**:圆环闪烁提示,并自动触发配置的实体
+
+## 状态持久化
+
+卡片会把倒计时状态保存在浏览器 `localStorage` 中,刷新页面后自动恢复;
+如果倒计时在页面关闭期间结束,重新打开时会把未触发的动作补触发一次。
+
+## 开发
+
+```bash
+npm run build   # 将 src/timer-se-card.js 打包到 dist/ha-timer-se-card.js
+```
+
+## 支持
+
+如果卡片对你有帮助,欢迎 Star 或提出 Issue。
+
+## License
+
+MIT

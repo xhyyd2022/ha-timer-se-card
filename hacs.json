@@ -1,0 +1,6 @@
+{
+  "name": "Timer SE Card",
+  "render_readme": true,
+  "homeassistant": "2023.1.0",
+  "filename": "ha-timer-se-card.js"
+}
