@@ -1,11 +1,12 @@
 # Timer SE Card
 
-一个为 Home Assistant 仪表盘(Lovelace)设计的**圆形旋转倒计时定时器卡片**。
+一个为 Home Assistant 仪表盘(Lovelace)设计的**纯前端倒计时定时器卡片**。
 
-- 🎡 **圆形旋转表盘**:在最大时间范围内拖动圆环即可设定时间,松手自动开始倒计时
+- 🎚️ **滑块拖动**:在 `slider_max` 范围内拖动设定分钟数,拖动即生效
 - ⌨️ **直接输入时间**:单个输入框,支持 `5`(分钟)/`30s`/`1h 30m` 等格式
 - ⏰ **预设时间一键跳转**:内置几个固定时间点,点击标签立刻跳转到对应时间并开始倒计时
-- 🔔 **倒计时结束触发实体**:时间到后自动按下你指定的按钮/开关/灯等实体
+- 🔔 **倒计时结束触发实体**:时间到后自动触发你指定的任意类型实体(不限制设备类型)
+- ⚡ **可触发后端事件**:结束后向 HA 触发事件,可搭配自动化(Event 触发器)使用
 - ⚙️ 支持最大时间限制、自定义主题色、深浅色主题自适应;尺寸由 HA 网格自动控制
 - ✏️ 提供**图形化配置编辑器**(添加卡片时可直接在 UI 中编辑)
 
@@ -33,7 +34,7 @@ type: module
 
 ```yaml
 type: custom:timer-se-card
-entity: button.fan_toggle        # 必填:倒计时结束后要触发的实体(按钮/开关/灯/脚本等)
+entity: button.fan_toggle        # 必填:倒计时结束后要触发的实体(任意类型,不限制)
 action: toggle                   # 可选:倒计时结束后的动作,默认 toggle
                                  #   toggle = 反转(开↔关) / on = 开启 / off = 关闭
 name: 睡前关风扇                  # 可选:卡片标题
@@ -42,13 +43,42 @@ presets:                         # 可选:预设时间(仅填分钟数,标签自
   - 10
   - 30
   - 60
-max_minutes: 60                  # 可选:表盘最大可旋转时间(分钟),默认 60
+slider_max: 60                   # 可选:滑块最大可拖动时间(分钟),默认 60
 autostart: true                  # 可选:点击预设后是否立即开始,默认 true
 color: "#ff8f00"                 # 可选:主题色,默认跟随 HA 主题
 ```
 
 > 卡片尺寸由 HA 仪表盘网格自动控制(默认 6×6),无需手动配置。`presets` 也支持
 > `{ minutes: 5 }` 或 `{ label: "5分", minutes: 5 }` 的写法(向后兼容)。
+
+### 搭配自动化(结束事件)
+
+倒计时结束后,卡片除了直接触发实体,还可以向 HA 后端触发一个事件,
+供自动化用 **Event** 触发器监听(例如实现"倒计时结束后关灯"):
+
+```yaml
+type: custom:timer-se-card
+entity: light.jdjz_cn_xxx          # 可选:结束后直接触发该实体
+event_type: timer_finished         # 可选:结束后向 HA 触发该事件
+event_data:                        # 可选:事件附带数据
+  timer_id: 123456
+```
+
+对应的自动化:
+
+```yaml
+triggers:
+  - event_type: timer_finished
+    event_data:
+      timer_id: 123456
+    trigger: event
+actions:
+  - action: light.turn_off
+    target:
+      entity_id: light.jdjz_cn_xxx
+```
+
+> 注意:`event_type` 触发事件需要 HA 管理员权限(默认用户通常是)。
 
 ### 直接输入时间
 
@@ -94,11 +124,11 @@ actions:
 
 ## 交互说明
 
-- **拖动圆环**:顺时针增加时间,逆时针减少;在 `max_minutes` 范围内
-- **点击预设标签**:立即跳转到该时间并(默认)开始倒计时
+- **拖动滑块**:在 `slider_max` 范围内拖动设定分钟数,自动应用到倒计时
+- **预设按钮**:点击立即跳转到该时间并(默认)开始倒计时
 - **输入框**:输入 `5`/`30s`/`1h 30m` 等直接设置时间
-- **点击圆心**:开始 / 暂停 / 继续 / 重置
-- **倒计时结束**:圆环闪烁提示,并自动触发配置的实体
+- **控制按钮**:开始 / 暂停 / 继续 / 重置
+- **倒计时结束**:进度块熄灭,并自动触发配置的实体
 
 ## 状态持久化
 
@@ -117,4 +147,8 @@ npm run build   # 将 src/timer-se-card.js 打包到 dist/ha-timer-se-card.js
 
 ## License
 
-MIT
+本项目是 [ha-simple-timer](https://github.com/ArikShemesh/ha-simple-timer)
+(Arik Shemesh) 的派生作品,卡片布局参考并精简自其 timer-card.ts。
+
+本程序基于 **GNU General Public License v3.0 (GPLv3)** 发布,与上游项目保持相同的开源许可。
+完整许可文本见 [LICENSE](./LICENSE)。

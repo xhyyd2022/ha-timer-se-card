@@ -1,10 +1,13 @@
 {
   "name": "ha-timer-se-card",
-  "version": "1.3.0",
-  "description": "A circular rotating countdown timer card for Home Assistant Lovelace. Tap presets to set time, rotate the dial, and trigger an entity/button when the countdown finishes.",
+  "version": "1.4.0",
+  "type": "module",
+  "description": "纯前端倒计时定时器卡片:滑块拖动/预设/输入设置时间,倒计时结束自动触发通用实体。派生自 ha-simple-timer (GPLv3)。",
   "main": "dist/ha-timer-se-card.js",
+  "module": "dist/ha-timer-se-card.js",
   "scripts": {
-    "build": "node scripts/build.js"
+    "build": "rollup -c --bundleConfigAsCjs",
+    "watch": "rollup -c --bundleConfigAsCjs --watch"
   },
   "keywords": [
     "home-assistant",
@@ -13,5 +16,18 @@
     "timer",
     "countdown"
   ],
-  "license": "MIT"
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    "lit": "^3.2.1"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.2",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^16.0.0",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^12.1.4",
+    "rollup": "^4.39.0",
+    "tslib": "^2.8.1",
+    "typescript": "^5.8.3"
+  }
 }

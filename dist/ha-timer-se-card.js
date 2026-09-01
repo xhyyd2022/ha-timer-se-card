@@ -1,1197 +1,289 @@
-/*!
- * Timer SE Card - circular rotating countdown timer for Home Assistant Lovelace
- * https://github.com/xhyyd2022/ha-timer-se-card
- *
- * MIT License
- */
-"use strict";
-
-(function () {
-  const DEFAULT_CONFIG = {
-    entity: undefined,
-    actions: undefined,
-    action: "toggle",
-    name: undefined,
-    presets: [5, 10, 30],
-    max_minutes: 60,
-    autostart: true,
-    color: null,
-    text: {
-      status_idle: "待机",
-      status_running: "倒计时中",
-      status_paused: "已暂停",
-      status_finished: "时间到!",
-      start: "开始",
-      pause: "暂停",
-      resume: "继续",
-      reset: "重置",
-      done: "完成",
-      set: "设置",
-    },
-  };
-
-  const SVG_SIZE = 220;
-  const CENTER = SVG_SIZE / 2;
-  const RING_WIDTH = 14; // 圆环粗细(固定,随尺寸自适应)
-  const DEFAULT_MAX_SECS = 60 * 60; // 1 hour
-
-  // 解析时间字符串,例如: "5"(分钟)、"30s"、"1h"、"1h 30m"、"1小时30分"
-  // 规则: 数字 + 可选单位后缀(h/m/s 或 时/分/秒);无后缀默认为分钟(m);支持空格分隔多个值
-  function parseDuration(str) {
-    if (typeof str !== "string") return null;
-    const s = str.trim();
-    if (!s) return null;
-    const tokens = s.split(/\s+/);
-    let total = 0;
-    for (const token of tokens) {
-      if (!token) continue;
-      const m = token.match(/^(\d+(?:\.\d+)?)\s*(小时|分钟|秒|[hms时分])?$/);
-      if (!m) return null;
-      const num = parseFloat(m[1]);
-      const unit = m[2] || "m";
-      switch (unit) {
-        case "h":
-        case "时":
-        case "小时":
-          total += num * 3600;
-          break;
-        case "m":
-        case "分":
-        case "分钟":
-          total += num * 60;
-          break;
-        case "s":
-        case "秒":
-          total += num;
-          break;
-        default:
-          return null;
-      }
-    }
-    return Math.max(0, Math.round(total));
-  }
-
-  function formatTime(totalSeconds) {
-    const s = Math.max(0, Math.floor(totalSeconds));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    const pad = (n) => (n < 10 ? "0" + n : "" + n);
-    return h > 0 ? h + ":" + pad(m) + ":" + pad(sec) : pad(m) + ":" + pad(sec);
-  }
-
-  function normalizePreset(p) {
-    if (typeof p === "number") {
-      return { label: p + "分", seconds: p * 60 };
-    }
-    if (typeof p === "object" && p !== null) {
-      if (typeof p.minutes === "number") {
-        return { label: p.label || p.minutes + "分", seconds: p.minutes * 60 };
-      }
-      if (typeof p.seconds === "number") {
-        return { label: p.label || p.seconds + "秒", seconds: p.seconds };
-      }
-      if (typeof p.duration === "number") {
-        return { label: p.label || p.duration + "秒", seconds: p.duration };
-      }
-    }
-    return null;
-  }
-
-  function defaultActionFor(entity, mode) {
-    const domain = entity.split(".")[0];
-    const m = mode || "toggle";
-    switch (domain) {
-      case "button":
-        return { service: "button.press", target: { entity_id: entity } };
-      case "script":
-        return { service: "script.turn_on", target: { entity_id: entity } };
-      case "scene":
-        return { service: "scene.turn_on", target: { entity_id: entity } };
-      default: {
-        const service =
-          m === "on" ? "turn_on" : m === "off" ? "turn_off" : "toggle";
-        return {
-          service: "homeassistant." + service,
-          target: { entity_id: entity },
-        };
-      }
-    }
-  }
-
-  class TimerSeCard extends HTMLElement {
-    static get version() {
-      return "1.3.0";
-    }
-
-    static getStubConfig() {
-      return {
-        entity: "",
-        name: "定时器",
-        presets: [5, 10, 30],
-        max_minutes: 60,
-        autostart: true,
-      };
-    }
-
-    static getConfigForm() {
-      return {
-        schema: [
-          { name: "name", selector: { text: {} } },
-          {
-            name: "entity",
-            required: true,
-            selector: {
-              entity: {
-                filter: [
-                  {
-                    domain: [
-                      "button",
-                      "switch",
-                      "input_boolean",
-                      "light",
-                      "fan",
-                      "cover",
-                      "script",
-                      "automation",
-                      "scene",
-                      "media_player",
-                      "climate",
-                    ],
-                  },
-                ],
-              },
-            },
-          },
-          {
-            name: "action",
-            selector: {
-              select: {
-                options: [
-                  { value: "toggle", label: "反转(toggle):开↔关" },
-                  { value: "on", label: "开启(turn_on)" },
-                  { value: "off", label: "关闭(turn_off)" },
-                ],
-                mode: "dropdown",
-              },
-            },
-          },
-          {
-            name: "max_minutes",
-            selector: { number: { min: 1, max: 1440, step: 1, unit_of_measurement: "分钟" } },
-          },
-          {
-            name: "presets",
-            selector: {
-              object: {
-                multiple: true,
-                label_field: "minutes",
-                fields: {
-                  minutes: { label: "分钟", selector: { number: { min: 1, max: 1440 } } },
-                },
-              },
-            },
-          },
-          {
-            type: "expandable",
-            name: "",
-            title: "高级选项",
-            schema: [
-              { name: "autostart", selector: { boolean: {} } },
-              { name: "color", selector: { text: {} } },
-              {
-                name: "actions",
-                selector: {
-                  object: {
-                    multiple: true,
-                    label_field: "service",
-                    fields: {
-                      service: { label: "服务", selector: { text: {} } },
-                      target: { label: "目标", selector: { object: {} } },
-                      data: { label: "数据", selector: { object: {} } },
-                    },
-                  },
-                },
-              },
-            ],
-          },
-        ],
-        computeLabel: (schema) => {
-          switch (schema.name) {
-            case "name":
-              return "卡片标题";
-            case "entity":
-              return "倒计时结束后触发的实体";
-            case "action":
-              return "倒计时结束后的动作";
-            case "max_minutes":
-              return "最大可设置时间";
-            case "presets":
-              return "预设时间";
-            case "autostart":
-              return "点击预设后立即开始";
-            case "color":
-              return "主题色(如 #ff8f00)";
-            case "actions":
-              return "自定义结束动作";
-            default:
-              return undefined;
-          }
-        },
-        computeHelper: (schema) => {
-          switch (schema.name) {
-            case "entity":
-              return "时间到后自动触发该实体(按钮/开关/灯等)";
-            case "action":
-              return "反转=切换开/关,也可固定为开启或关闭;按钮/脚本/场景类实体仍按各自动作触发";
-            case "presets":
-              return "仅需填写分钟数,标签会自动生成,点击卡片上的标签可一键跳转";
-            case "actions":
-              return "填写后优先于实体的自动动作,例如 service 填 button.press";
-            case "color":
-              return "留空则跟随 HA 主题";
-            default:
-              return undefined;
-          }
-        },
-      };
-    }
-
-    constructor() {
-      super();
-      this.attachShadow({ mode: "open" });
-      this._config = null;
-      this._hass = null;
-
-      this._state = "idle"; // idle | running | paused | finished
-      this._remaining = 0; // seconds left
-      this._total = 0; // seconds originally set for current run
-      this._endAt = 0; // timestamp (ms)
-      this._dragging = false;
-      this._timer = null;
-      this._firedAt = null;
-
-      this._storageKey = null;
-      this._cacheKey = null;
-
-      const style = document.createElement("style");
-      style.textContent = this.constructor._style;
-      this.shadowRoot.appendChild(style);
-    }
-
-    setConfig(config) {
-      if (!config || typeof config !== "object") {
-        throw new Error("需要提供配置对象 (config)");
-      }
-
-      const merged = Object.assign(
-        JSON.parse(JSON.stringify(DEFAULT_CONFIG)),
-        config
-      );
-      merged.text = Object.assign({}, DEFAULT_CONFIG.text, config.text || {});
-      merged.presets = (config.presets || DEFAULT_CONFIG.presets)
-        .map(normalizePreset)
-        .filter(Boolean);
-      // action 支持三模式:"toggle"(反转,默认)/ "on"(开启) / "off"(关闭)
-      // 也兼容自定义 service 对象(如 { service: "button.press", target: {...} })
-      if (typeof merged.action === "string") {
-        merged.action = merged.action.toLowerCase();
-        if (!["toggle", "on", "off"].includes(merged.action)) {
-          merged.action = "toggle";
-        }
-      }
-      if (merged.max_minutes && merged.max_minutes > 0) {
-        this._maxSecsValue = merged.max_minutes * 60;
-      } else {
-        this._maxSecsValue = DEFAULT_MAX_SECS;
-      }
-      if (Array.isArray(merged.color)) {
-        merged.color =
-          "#" +
-          merged.color
-            .map((c) =>
-              Math.max(0, Math.min(255, Math.round(c)))
-                .toString(16)
-                .padStart(2, "0")
-            )
-            .join("");
-      }
-
-      this._config = merged;
-      this._valid = !!(
-        merged.entity ||
-        (Array.isArray(merged.actions) && merged.actions.length) ||
-        (merged.action &&
-          typeof merged.action === "object" &&
-          merged.action.service)
-      );
-      this._storageKey = "timer-se-card:" + (merged.entity || "default");
-      this._cacheKey = (merged.entity || "none") + "|" + (merged.actions ? JSON.stringify(merged.actions) : "") + "|" + (merged.action ? JSON.stringify(merged.action) : "");
-
-      this._restoreState();
-      this._render();
-    }
-
-    set hass(hass) {
-      this._hass = hass;
-      this._applyTheme();
-      if (this._config) {
-        this._render();
-      }
-    }
-
-    connectedCallback() {
-      this._applyTheme();
-      this._attachEvents();
-      this._render();
-    }
-
-    // 与官方卡片一致:主动把 HA 主题变量应用到本元素,
-    // 避免在编辑预览等场景下出现"一团黑"(变量未注入)。
-    _applyTheme() {
-      const hass = this._hass;
-      if (!hass) return;
-      try {
-        if (typeof hass.applyThemesOnElement === "function") {
-          hass.applyThemesOnElement(this, hass.themes, this._config?.theme);
-          return;
-        }
-      } catch (e) {
-        /* ignore */
-      }
-      // 兼容未暴露 API 的旧版本:至少注入暗色模式标记
-      if (hass.themes && hass.themes.darkMode) {
-        this.setAttribute("data-theme", "dark");
-      } else {
-        this.removeAttribute("data-theme");
-      }
-    }
-
-    disconnectedCallback() {
-      this._detachEvents();
-      if (this._timer) {
-        clearInterval(this._timer);
-        this._timer = null;
-      }
-      this._saveState();
-    }
-
-    getCardSize() {
-      return 6;
-    }
-
-    getGridOptions() {
-      return {
-        rows: 6,
-        columns: 6,
-      };
-    }
-
-    /* ---------------- state ---------------- */
-
-    _maxSecs() {
-      return this._maxSecsValue || DEFAULT_MAX_SECS;
-    }
-
-    _presets() {
-      return (this._config && this._config.presets) || [];
-    }
-
-    _text(key) {
-      return (this._config && this._config.text && this._config.text[key]) || "";
-    }
-
-    _restoreState() {
-      let saved = null;
-      try {
-        const raw = localStorage.getItem(this._storageKey);
-        if (raw) saved = JSON.parse(raw);
-      } catch (e) {
-        saved = null;
-      }
-      if (!saved) return;
-
-      const now = Date.now();
-      if (saved.state === "running" && typeof saved.endAt === "number") {
-        if (saved.endAt > now) {
-          this._state = "running";
-          this._remaining = (saved.endAt - now) / 1000;
-          this._total = typeof saved.total === "number" ? saved.total : this._remaining;
-          this._endAt = saved.endAt;
-          this._firedAt = saved.firedAt || null;
-        } else {
-          // The countdown finished while the page was closed.
-          this._state = "finished";
-          this._remaining = 0;
-          this._total = typeof saved.total === "number" ? saved.total : 0;
-          this._endAt = 0;
-          this._firedAt = saved.firedAt || null;
-        }
-      } else if (saved.state === "paused") {
-        this._state = "paused";
-        this._remaining = typeof saved.remaining === "number" ? saved.remaining : 0;
-        this._total = typeof saved.total === "number" ? saved.total : this._remaining;
-        this._endAt = 0;
-      } else if (saved.state === "idle") {
-        this._state = "idle";
-        this._remaining = typeof saved.remaining === "number" ? saved.remaining : 0;
-        this._total = typeof saved.total === "number" ? saved.total : this._remaining;
-      }
-    }
-
-    _saveState() {
-      if (!this._storageKey) return;
-      const data = {
-        state: this._state,
-        remaining: Math.round(this._remaining),
-        total: this._total,
-        endAt: this._endAt,
-        firedAt: this._firedAt,
-      };
-      try {
-        localStorage.setItem(this._storageKey, JSON.stringify(data));
-      } catch (e) {
-        /* ignore storage errors */
-      }
-    }
-
-    _start() {
-      if (this._remaining <= 0) return;
-      this._state = "running";
-      this._endAt = Date.now() + this._remaining * 1000;
-      if (this._timer) clearInterval(this._timer);
-      this._timer = setInterval(() => this._tick(), 250);
-      this._saveState();
-      this._render();
-    }
-
-    _pause() {
-      if (this._state !== "running") return;
-      if (this._timer) clearInterval(this._timer);
-      this._timer = null;
-      this._state = "paused";
-      this._endAt = 0;
-      this._saveState();
-      this._render();
-    }
-
-    _resume() {
-      if (this._state !== "paused" || this._remaining <= 0) return;
-      this._start();
-    }
-
-    _reset() {
-      if (this._timer) clearInterval(this._timer);
-      this._timer = null;
-      this._state = "idle";
-      this._remaining = 0;
-      this._total = 0;
-      this._endAt = 0;
-      this._firedAt = null;
-      this._saveState();
-      this._render();
-    }
-
-    _tick() {
-      this._remaining = Math.max(0, (this._endAt - Date.now()) / 1000);
-      if (this._remaining <= 0) {
-        this._finish();
-        return;
-      }
-      this._render();
-    }
-
-    _finish() {
-      if (this._timer) clearInterval(this._timer);
-      this._timer = null;
-      this._state = "finished";
-      this._remaining = 0;
-      this._endAt = 0;
-      if (!this._firedAt) {
-        this._firedAt = Date.now();
-        this._fireActions();
-      }
-      this._saveState();
-      this._render();
-    }
-
-    _setPreset(seconds, label) {
-      if (this._timer) clearInterval(this._timer);
-      this._timer = null;
-      this._remaining = Math.max(0, seconds);
-      this._total = this._remaining;
-      this._endAt = 0;
-      this._state = "idle";
-      this._firedAt = null; // 新定时开始前清除已触发标记,确保结束时一定执行动作
-      this._saveState();
-      if (this._config.autostart && this._remaining > 0) {
-        this._start();
-      } else {
-        this._render();
-      }
-    }
-
-    _setFromInput() {
-      const input = this.shadowRoot.querySelector(".tse-input");
-      if (!input) return;
-      const seconds = parseDuration(input.value);
-      if (seconds === null || seconds <= 0) {
-        input.classList.add("is-invalid");
-        setTimeout(() => input.classList.remove("is-invalid"), 800);
-        return;
-      }
-      input.classList.remove("is-invalid");
-      this._setPreset(seconds);
-    }
-
-    _toggleCenter() {
-      switch (this._state) {
-        case "running":
-          this._pause();
-          break;
-        case "paused":
-          this._resume();
-          break;
-        case "finished":
-          this._reset();
-          break;
-        default:
-          if (this._remaining > 0) this._start();
-          break;
-      }
-    }
-
-    /* ---------------- actions ---------------- */
-
-    _resolveActions() {
-      const config = this._config;
-      if (Array.isArray(config.actions) && config.actions.length) {
-        return config.actions.filter((a) => a && typeof a.service === "string");
-      }
-      if (config.action && typeof config.action === "object" && config.action.service) {
-        return [config.action];
-      }
-      if (config.entity) {
-        const mode =
-          typeof config.action === "string" ? config.action : "toggle";
-        return [defaultActionFor(config.entity, mode)];
-      }
-      return [];
-    }
-
-    _fireActions() {
-      const actions = this._resolveActions();
-      actions.forEach((a) => {
-        const dot = a.service.indexOf(".");
-        if (dot <= 0) {
-          console.error("timer-se-card: 无效的 service " + a.service);
-          return;
-        }
-        const domain = a.service.substring(0, dot);
-        const service = a.service.substring(dot + 1);
-        try {
-          if (this._hass && typeof this._hass.callService === "function") {
-            this._hass.callService(domain, service, a.data || {}, a.target || {});
-          } else {
-            console.warn("timer-se-card: hass 尚未就绪,跳过动作 " + a.service);
-          }
-        } catch (e) {
-          console.error("timer-se-card: 调用 " + a.service + " 失败", e);
-        }
-      });
-      this.dispatchEvent(
-        new CustomEvent("timer-se-card-finished", {
-          detail: { config: this._config, actions },
-          bubbles: true,
-          composed: true,
-        })
-      );
-    }
-
-    /* ---------------- drag / rotate ---------------- */
-
-    _pointerPosFromEvent(e) {
-      const rect = this._svg.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * SVG_SIZE;
-      const y = ((e.clientY - rect.top) / rect.height) * SVG_SIZE;
-      return { x, y };
-    }
-
-    _secondsFromPos(x, y) {
-      const dx = x - CENTER;
-      const dy = y - CENTER;
-      let angle = Math.atan2(dx, -dy) * (180 / Math.PI); // 12 o'clock = 0, clockwise+
-      if (angle < 0) angle += 360;
-      return Math.min(this._maxSecs(), Math.round((angle / 360) * this._maxSecs()));
-    }
-
-    _onPointerDown(e) {
-      if (!this._config) return;
-      e.preventDefault();
-      this._dragging = true;
-      if (this._timer) {
-        clearInterval(this._timer);
-        this._timer = null;
-      }
-      try {
-        e.target.setPointerCapture(e.pointerId);
-      } catch (err) {
-        /* ignore */
-      }
-      this._applyDrag(e);
-    }
-
-    _onPointerMove(e) {
-      if (!this._dragging) return;
-      this._applyDrag(e);
-    }
-
-    _onPointerUp(e) {
-      if (!this._dragging) return;
-      this._dragging = false;
-      if (this._remaining > 0) {
-        this._state = "idle";
-        this._total = this._remaining;
-        this._start();
-      } else {
-        this._state = "idle";
-        this._total = 0;
-        this._saveState();
-        this._render();
-      }
-    }
-
-    _applyDrag(e) {
-      const { x, y } = this._pointerPosFromEvent(e);
-      const secs = this._secondsFromPos(x, y);
-      this._remaining = secs;
-      this._total = secs;
-      this._state = "idle";
-      this._updateVisuals();
-    }
-
-    /* ---------------- visuals (lightweight drag update) ---------------- */
-
-    _statusText() {
-      const text = this._config ? this._config.text : null;
-      switch (this._state) {
-        case "running":
-          return text ? text.status_running : "倒计时中";
-        case "paused":
-          return text ? text.status_paused : "已暂停";
-        case "finished":
-          return text ? text.status_finished : "时间到!";
-        default:
-          if (this._remaining > 0) return "已设 " + formatTime(this._remaining);
-          return text ? text.status_idle : "待机";
-      }
-    }
-
-    _centerButtonLabel() {
-      const text = this._config ? this._config.text : null;
-      switch (this._state) {
-        case "running":
-          return text ? text.pause : "暂停";
-        case "paused":
-          return text ? text.resume : "继续";
-        case "finished":
-          return text ? text.done : "完成";
-        default:
-          return text ? text.start : "开始";
-      }
-    }
-
-    _updateVisuals() {
-      const root = this.shadowRoot;
-      const svg = root.querySelector(".tse-svg");
-      const config = this._config;
-      if (!svg || !config) return;
-
-      const ringWidth = RING_WIDTH;
-      const circumference = 2 * Math.PI * (CENTER - ringWidth / 2);
-      const progress = this._progress();
-      const dashOffset = circumference * (1 - progress);
-      const angle = this._knobAngle();
-      const rad = (angle * Math.PI) / 180;
-      const knobX = CENTER + (CENTER - ringWidth) * Math.sin(rad);
-      const knobY = CENTER - (CENTER - ringWidth) * Math.cos(rad);
-
-      const progressEl = svg.querySelector(".tse-progress");
-      if (progressEl) progressEl.setAttribute("stroke-dashoffset", String(dashOffset));
-      const handEl = svg.querySelector(".tse-hand");
-      if (handEl) {
-        handEl.setAttribute("x2", String(knobX));
-        handEl.setAttribute("y2", String(knobY));
-      }
-      const knobEl = svg.querySelector(".tse-knob");
-      if (knobEl) {
-        knobEl.setAttribute("cx", String(knobX));
-        knobEl.setAttribute("cy", String(knobY));
-      }
-      const timeEl = root.querySelector(".tse-time");
-      if (timeEl) {
-        timeEl.textContent =
-          this._state === "finished" ? "00:00" : formatTime(this._remaining);
-      }
-      const statusEl = root.querySelector(".tse-status");
-      if (statusEl) statusEl.textContent = this._statusText();
-      const centerLabel = root.querySelector(".tse-center-label");
-      if (centerLabel) centerLabel.textContent = this._centerButtonLabel();
-      const mainBtn = root.querySelector('.tse-btn[data-action="center"]');
-      if (mainBtn) mainBtn.textContent = this._centerButtonLabel();
-      root.querySelectorAll(".tse-preset").forEach((btn) => {
-        const secs = Number(btn.getAttribute("data-seconds"));
-        btn.classList.toggle(
-          "is-active",
-          this._remaining > 0 && Math.abs(this._remaining - secs) < 1.5
-        );
-      });
-    }
-
-    /* ---------------- rendering ---------------- */
-
-    _entityState() {
-      const entity = this._config && this._config.entity;
-      if (!entity || !this._hass) return null;
-      return this._hass.states[entity] || null;
-    }
-
-    _progress() {
-      const max = this._maxSecs();
-      if (max <= 0) return 0;
-      return Math.max(0, Math.min(1, this._remaining / max));
-    }
-
-    _knobAngle() {
-      return this._progress() * 360;
-    }
-
-    _render() {
-      const config = this._config;
-      if (!config) {
-        this.shadowRoot.innerHTML = "";
-        return;
-      }
-
-      if (!this._valid) {
-        this.shadowRoot.innerHTML = `
-          <style>
-            .tse-hint {
-              font-family: var(--primary-font-family, "Roboto", sans-serif);
-              background: var(--ha-card-background, var(--card-background-color, #fff));
-              color: var(--secondary-text-color, #727272);
-              border-radius: var(--ha-card-border-radius, 12px);
-              box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0, 0, 0, 0.15));
-              padding: 20px;
-              font-size: 14px;
-              line-height: 1.6;
-            }
-          </style>
-          <div class="tse-hint">请配置「倒计时结束后触发的实体」或「自定义结束动作」后使用本卡片。</div>
-        `;
-        return;
-      }
-
-      const color = config.color || "var(--accent-color, #ff8f00)";
-      const ringWidth = RING_WIDTH;
-      const progress = this._progress();
-      const knobAngle = this._knobAngle();
-      const circumference = 2 * Math.PI * (CENTER - ringWidth / 2);
-      const dashOffset = circumference * (1 - progress);
-      const text = config.text;
-
-      const statusLabel = this._statusText();
-
-      const timeText =
-        this._state === "finished"
-          ? "00:00"
-          : formatTime(this._remaining);
-
-      const entity = this._entityState();
-      const entityName = entity
-        ? entity.attributes.friendly_name || config.entity
-        : null;
-
-      const headerTitle =
-        config.name || entityName || text.status_idle;
-
-      let headerChip = "";
-      if (entity) {
-        const on = entity.state === "on" || entity.state === "open";
-        headerChip =
-          '<div class="tse-chip ' +
-          (on ? "is-on" : "is-off") +
-          '" title="' +
-          this._escape(config.entity) +
-          '">' +
-          (on ? "开" : "关") +
-          "</div>";
-      }
-
-      const knobRadians = (knobAngle * Math.PI) / 180;
-      const knobX = CENTER + (CENTER - ringWidth) * Math.sin(knobRadians);
-      const knobY = CENTER - (CENTER - ringWidth) * Math.cos(knobRadians);
-
-      const presetsHtml = this._presets()
-        .map((p) => {
-          const active =
-            this._remaining > 0 && Math.abs(this._remaining - p.seconds) < 1.5;
-          return (
-            '<button class="tse-preset' +
-            (active ? " is-active" : "") +
-            '" data-seconds="' +
-            p.seconds +
-            '">' +
-            this._escape(p.label) +
-            "</button>"
-          );
-        })
-        .join("");
-
-      const centerButtonLabel = this._centerButtonLabel();
-
-      const showReset = this._state !== "idle" || this._total > 0;
-      const showCenter = this._state !== "idle";
-
-      this.shadowRoot.innerHTML = `
-        <style>
-          :host {
-            --tse-accent: ${color};
-          }
-        </style>
-        <ha-card class="tse-card">
-          <div class="tse-header">
-            <span class="tse-title">${this._escape(headerTitle)}</span>
-            ${headerChip}
-            <span class="tse-status">${this._escape(statusLabel)}</span>
+function t(t,e,s,i){var r,n=arguments.length,o=n<3?e:null===i?i=Object.getOwnPropertyDescriptor(e,s):i;if("object"==typeof Reflect&&"function"==typeof Reflect.decorate)o=Reflect.decorate(t,e,s,i);else for(var a=t.length-1;a>=0;a--)(r=t[a])&&(o=(n<3?r(o):n>3?r(e,s,o):r(e,s))||o);return n>3&&o&&Object.defineProperty(e,s,o),o}"function"==typeof SuppressedError&&SuppressedError;const e=globalThis,s=e.ShadowRoot&&(void 0===e.ShadyCSS||e.ShadyCSS.nativeShadow)&&"adoptedStyleSheets"in Document.prototype&&"replace"in CSSStyleSheet.prototype,i=Symbol(),r=new WeakMap;let n=class{constructor(t,e,s){if(this._$cssResult$=!0,s!==i)throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");this.cssText=t,this.t=e}get styleSheet(){let t=this.o;const e=this.t;if(s&&void 0===t){const s=void 0!==e&&1===e.length;s&&(t=r.get(e)),void 0===t&&((this.o=t=new CSSStyleSheet).replaceSync(this.cssText),s&&r.set(e,t))}return t}toString(){return this.cssText}};const o=s?t=>t:t=>t instanceof CSSStyleSheet?(t=>{let e="";for(const s of t.cssRules)e+=s.cssText;return(t=>new n("string"==typeof t?t:t+"",void 0,i))(e)})(t):t,{is:a,defineProperty:c,getOwnPropertyDescriptor:l,getOwnPropertyNames:h,getOwnPropertySymbols:d,getPrototypeOf:p}=Object,u=globalThis,_=u.trustedTypes,f=_?_.emptyScript:"",m=u.reactiveElementPolyfillSupport,g=(t,e)=>t,v={toAttribute(t,e){switch(e){case Boolean:t=t?f:null;break;case Object:case Array:t=null==t?t:JSON.stringify(t)}return t},fromAttribute(t,e){let s=t;switch(e){case Boolean:s=null!==t;break;case Number:s=null===t?null:Number(t);break;case Object:case Array:try{s=JSON.parse(t)}catch(t){s=null}}return s}},b=(t,e)=>!a(t,e),y={attribute:!0,type:String,converter:v,reflect:!1,useDefault:!1,hasChanged:b};Symbol.metadata??=Symbol("metadata"),u.litPropertyMetadata??=new WeakMap;let $=class extends HTMLElement{static addInitializer(t){this._$Ei(),(this.l??=[]).push(t)}static get observedAttributes(){return this.finalize(),this._$Eh&&[...this._$Eh.keys()]}static createProperty(t,e=y){if(e.state&&(e.attribute=!1),this._$Ei(),this.prototype.hasOwnProperty(t)&&((e=Object.create(e)).wrapped=!0),this.elementProperties.set(t,e),!e.noAccessor){const s=Symbol(),i=this.getPropertyDescriptor(t,s,e);void 0!==i&&c(this.prototype,t,i)}}static getPropertyDescriptor(t,e,s){const{get:i,set:r}=l(this.prototype,t)??{get(){return this[e]},set(t){this[e]=t}};return{get:i,set(e){const n=i?.call(this);r?.call(this,e),this.requestUpdate(t,n,s)},configurable:!0,enumerable:!0}}static getPropertyOptions(t){return this.elementProperties.get(t)??y}static _$Ei(){if(this.hasOwnProperty(g("elementProperties")))return;const t=p(this);t.finalize(),void 0!==t.l&&(this.l=[...t.l]),this.elementProperties=new Map(t.elementProperties)}static finalize(){if(this.hasOwnProperty(g("finalized")))return;if(this.finalized=!0,this._$Ei(),this.hasOwnProperty(g("properties"))){const t=this.properties,e=[...h(t),...d(t)];for(const s of e)this.createProperty(s,t[s])}const t=this[Symbol.metadata];if(null!==t){const e=litPropertyMetadata.get(t);if(void 0!==e)for(const[t,s]of e)this.elementProperties.set(t,s)}this._$Eh=new Map;for(const[t,e]of this.elementProperties){const s=this._$Eu(t,e);void 0!==s&&this._$Eh.set(s,t)}this.elementStyles=this.finalizeStyles(this.styles)}static finalizeStyles(t){const e=[];if(Array.isArray(t)){const s=new Set(t.flat(1/0).reverse());for(const t of s)e.unshift(o(t))}else void 0!==t&&e.push(o(t));return e}static _$Eu(t,e){const s=e.attribute;return!1===s?void 0:"string"==typeof s?s:"string"==typeof t?t.toLowerCase():void 0}constructor(){super(),this._$Ep=void 0,this.isUpdatePending=!1,this.hasUpdated=!1,this._$Em=null,this._$Ev()}_$Ev(){this._$ES=new Promise(t=>this.enableUpdating=t),this._$AL=new Map,this._$E_(),this.requestUpdate(),this.constructor.l?.forEach(t=>t(this))}addController(t){(this._$EO??=new Set).add(t),void 0!==this.renderRoot&&this.isConnected&&t.hostConnected?.()}removeController(t){this._$EO?.delete(t)}_$E_(){const t=new Map,e=this.constructor.elementProperties;for(const s of e.keys())this.hasOwnProperty(s)&&(t.set(s,this[s]),delete this[s]);t.size>0&&(this._$Ep=t)}createRenderRoot(){const t=this.shadowRoot??this.attachShadow(this.constructor.shadowRootOptions);return((t,i)=>{if(s)t.adoptedStyleSheets=i.map(t=>t instanceof CSSStyleSheet?t:t.styleSheet);else for(const s of i){const i=document.createElement("style"),r=e.litNonce;void 0!==r&&i.setAttribute("nonce",r),i.textContent=s.cssText,t.appendChild(i)}})(t,this.constructor.elementStyles),t}connectedCallback(){this.renderRoot??=this.createRenderRoot(),this.enableUpdating(!0),this._$EO?.forEach(t=>t.hostConnected?.())}enableUpdating(t){}disconnectedCallback(){this._$EO?.forEach(t=>t.hostDisconnected?.())}attributeChangedCallback(t,e,s){this._$AK(t,s)}_$ET(t,e){const s=this.constructor.elementProperties.get(t),i=this.constructor._$Eu(t,s);if(void 0!==i&&!0===s.reflect){const r=(void 0!==s.converter?.toAttribute?s.converter:v).toAttribute(e,s.type);this._$Em=t,null==r?this.removeAttribute(i):this.setAttribute(i,r),this._$Em=null}}_$AK(t,e){const s=this.constructor,i=s._$Eh.get(t);if(void 0!==i&&this._$Em!==i){const t=s.getPropertyOptions(i),r="function"==typeof t.converter?{fromAttribute:t.converter}:void 0!==t.converter?.fromAttribute?t.converter:v;this._$Em=i;const n=r.fromAttribute(e,t.type);this[i]=n??this._$Ej?.get(i)??n,this._$Em=null}}requestUpdate(t,e,s,i=!1,r){if(void 0!==t){const n=this.constructor;if(!1===i&&(r=this[t]),s??=n.getPropertyOptions(t),!((s.hasChanged??b)(r,e)||s.useDefault&&s.reflect&&r===this._$Ej?.get(t)&&!this.hasAttribute(n._$Eu(t,s))))return;this.C(t,e,s)}!1===this.isUpdatePending&&(this._$ES=this._$EP())}C(t,e,{useDefault:s,reflect:i,wrapped:r},n){s&&!(this._$Ej??=new Map).has(t)&&(this._$Ej.set(t,n??e??this[t]),!0!==r||void 0!==n)||(this._$AL.has(t)||(this.hasUpdated||s||(e=void 0),this._$AL.set(t,e)),!0===i&&this._$Em!==t&&(this._$Eq??=new Set).add(t))}async _$EP(){this.isUpdatePending=!0;try{await this._$ES}catch(t){Promise.reject(t)}const t=this.scheduleUpdate();return null!=t&&await t,!this.isUpdatePending}scheduleUpdate(){return this.performUpdate()}performUpdate(){if(!this.isUpdatePending)return;if(!this.hasUpdated){if(this.renderRoot??=this.createRenderRoot(),this._$Ep){for(const[t,e]of this._$Ep)this[t]=e;this._$Ep=void 0}const t=this.constructor.elementProperties;if(t.size>0)for(const[e,s]of t){const{wrapped:t}=s,i=this[e];!0!==t||this._$AL.has(e)||void 0===i||this.C(e,void 0,s,i)}}let t=!1;const e=this._$AL;try{t=this.shouldUpdate(e),t?(this.willUpdate(e),this._$EO?.forEach(t=>t.hostUpdate?.()),this.update(e)):this._$EM()}catch(e){throw t=!1,this._$EM(),e}t&&this._$AE(e)}willUpdate(t){}_$AE(t){this._$EO?.forEach(t=>t.hostUpdated?.()),this.hasUpdated||(this.hasUpdated=!0,this.firstUpdated(t)),this.updated(t)}_$EM(){this._$AL=new Map,this.isUpdatePending=!1}get updateComplete(){return this.getUpdateComplete()}getUpdateComplete(){return this._$ES}shouldUpdate(t){return!0}update(t){this._$Eq&&=this._$Eq.forEach(t=>this._$ET(t,this[t])),this._$EM()}updated(t){}firstUpdated(t){}};$.elementStyles=[],$.shadowRootOptions={mode:"open"},$[g("elementProperties")]=new Map,$[g("finalized")]=new Map,m?.({ReactiveElement:$}),(u.reactiveElementVersions??=[]).push("2.1.2");const x=globalThis,A=t=>t,w=x.trustedTypes,S=w?w.createPolicy("lit-html",{createHTML:t=>t}):void 0,E="$lit$",k=`lit$${Math.random().toFixed(9).slice(2)}$`,C="?"+k,P=`<${C}>`,M=document,O=()=>M.createComment(""),T=t=>null===t||"object"!=typeof t&&"function"!=typeof t,R=Array.isArray,U="[ \t\n\f\r]",H=/<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g,N=/-->/g,j=/>/g,z=RegExp(`>|${U}(?:([^\\s"'>=/]+)(${U}*=${U}*(?:[^ \t\n\f\r"'\`<>=]|("|')|))|$)`,"g"),I=/'/g,D=/"/g,L=/^(?:script|style|textarea|title)$/i,V=(t=>(e,...s)=>({_$litType$:t,strings:e,values:s}))(1),B=Symbol.for("lit-noChange"),q=Symbol.for("lit-nothing"),W=new WeakMap,F=M.createTreeWalker(M,129);function K(t,e){if(!R(t)||!t.hasOwnProperty("raw"))throw Error("invalid template strings array");return void 0!==S?S.createHTML(e):e}const J=(t,e)=>{const s=t.length-1,i=[];let r,n=2===e?"<svg>":3===e?"<math>":"",o=H;for(let e=0;e<s;e++){const s=t[e];let a,c,l=-1,h=0;for(;h<s.length&&(o.lastIndex=h,c=o.exec(s),null!==c);)h=o.lastIndex,o===H?"!--"===c[1]?o=N:void 0!==c[1]?o=j:void 0!==c[2]?(L.test(c[2])&&(r=RegExp("</"+c[2],"g")),o=z):void 0!==c[3]&&(o=z):o===z?">"===c[0]?(o=r??H,l=-1):void 0===c[1]?l=-2:(l=o.lastIndex-c[2].length,a=c[1],o=void 0===c[3]?z:'"'===c[3]?D:I):o===D||o===I?o=z:o===N||o===j?o=H:(o=z,r=void 0);const d=o===z&&t[e+1].startsWith("/>")?" ":"";n+=o===H?s+P:l>=0?(i.push(a),s.slice(0,l)+E+s.slice(l)+k+d):s+k+(-2===l?e:d)}return[K(t,n+(t[s]||"<?>")+(2===e?"</svg>":3===e?"</math>":"")),i]};class Z{constructor({strings:t,_$litType$:e},s){let i;this.parts=[];let r=0,n=0;const o=t.length-1,a=this.parts,[c,l]=J(t,e);if(this.el=Z.createElement(c,s),F.currentNode=this.el.content,2===e||3===e){const t=this.el.content.firstChild;t.replaceWith(...t.childNodes)}for(;null!==(i=F.nextNode())&&a.length<o;){if(1===i.nodeType){if(i.hasAttributes())for(const t of i.getAttributeNames())if(t.endsWith(E)){const e=l[n++],s=i.getAttribute(t).split(k),o=/([.?@])?(.*)/.exec(e);a.push({type:1,index:r,name:o[2],strings:s,ctor:"."===o[1]?tt:"?"===o[1]?et:"@"===o[1]?st:Y}),i.removeAttribute(t)}else t.startsWith(k)&&(a.push({type:6,index:r}),i.removeAttribute(t));if(L.test(i.tagName)){const t=i.textContent.split(k),e=t.length-1;if(e>0){i.textContent=w?w.emptyScript:"";for(let s=0;s<e;s++)i.append(t[s],O()),F.nextNode(),a.push({type:2,index:++r});i.append(t[e],O())}}}else if(8===i.nodeType)if(i.data===C)a.push({type:2,index:r});else{let t=-1;for(;-1!==(t=i.data.indexOf(k,t+1));)a.push({type:7,index:r}),t+=k.length-1}r++}}static createElement(t,e){const s=M.createElement("template");return s.innerHTML=t,s}}function G(t,e,s=t,i){if(e===B)return e;let r=void 0!==i?s._$Co?.[i]:s._$Cl;const n=T(e)?void 0:e._$litDirective$;return r?.constructor!==n&&(r?._$AO?.(!1),void 0===n?r=void 0:(r=new n(t),r._$AT(t,s,i)),void 0!==i?(s._$Co??=[])[i]=r:s._$Cl=r),void 0!==r&&(e=G(t,r._$AS(t,e.values),r,i)),e}class Q{constructor(t,e){this._$AV=[],this._$AN=void 0,this._$AD=t,this._$AM=e}get parentNode(){return this._$AM.parentNode}get _$AU(){return this._$AM._$AU}u(t){const{el:{content:e},parts:s}=this._$AD,i=(t?.creationScope??M).importNode(e,!0);F.currentNode=i;let r=F.nextNode(),n=0,o=0,a=s[0];for(;void 0!==a;){if(n===a.index){let e;2===a.type?e=new X(r,r.nextSibling,this,t):1===a.type?e=new a.ctor(r,a.name,a.strings,this,t):6===a.type&&(e=new it(r,this,t)),this._$AV.push(e),a=s[++o]}n!==a?.index&&(r=F.nextNode(),n++)}return F.currentNode=M,i}p(t){let e=0;for(const s of this._$AV)void 0!==s&&(void 0!==s.strings?(s._$AI(t,s,e),e+=s.strings.length-2):s._$AI(t[e])),e++}}class X{get _$AU(){return this._$AM?._$AU??this._$Cv}constructor(t,e,s,i){this.type=2,this._$AH=q,this._$AN=void 0,this._$AA=t,this._$AB=e,this._$AM=s,this.options=i,this._$Cv=i?.isConnected??!0}get parentNode(){let t=this._$AA.parentNode;const e=this._$AM;return void 0!==e&&11===t?.nodeType&&(t=e.parentNode),t}get startNode(){return this._$AA}get endNode(){return this._$AB}_$AI(t,e=this){t=G(this,t,e),T(t)?t===q||null==t||""===t?(this._$AH!==q&&this._$AR(),this._$AH=q):t!==this._$AH&&t!==B&&this._(t):void 0!==t._$litType$?this.$(t):void 0!==t.nodeType?this.T(t):(t=>R(t)||"function"==typeof t?.[Symbol.iterator])(t)?this.k(t):this._(t)}O(t){return this._$AA.parentNode.insertBefore(t,this._$AB)}T(t){this._$AH!==t&&(this._$AR(),this._$AH=this.O(t))}_(t){this._$AH!==q&&T(this._$AH)?this._$AA.nextSibling.data=t:this.T(M.createTextNode(t)),this._$AH=t}$(t){const{values:e,_$litType$:s}=t,i="number"==typeof s?this._$AC(t):(void 0===s.el&&(s.el=Z.createElement(K(s.h,s.h[0]),this.options)),s);if(this._$AH?._$AD===i)this._$AH.p(e);else{const t=new Q(i,this),s=t.u(this.options);t.p(e),this.T(s),this._$AH=t}}_$AC(t){let e=W.get(t.strings);return void 0===e&&W.set(t.strings,e=new Z(t)),e}k(t){R(this._$AH)||(this._$AH=[],this._$AR());const e=this._$AH;let s,i=0;for(const r of t)i===e.length?e.push(s=new X(this.O(O()),this.O(O()),this,this.options)):s=e[i],s._$AI(r),i++;i<e.length&&(this._$AR(s&&s._$AB.nextSibling,i),e.length=i)}_$AR(t=this._$AA.nextSibling,e){for(this._$AP?.(!1,!0,e);t!==this._$AB;){const e=A(t).nextSibling;A(t).remove(),t=e}}setConnected(t){void 0===this._$AM&&(this._$Cv=t,this._$AP?.(t))}}class Y{get tagName(){return this.element.tagName}get _$AU(){return this._$AM._$AU}constructor(t,e,s,i,r){this.type=1,this._$AH=q,this._$AN=void 0,this.element=t,this.name=e,this._$AM=i,this.options=r,s.length>2||""!==s[0]||""!==s[1]?(this._$AH=Array(s.length-1).fill(new String),this.strings=s):this._$AH=q}_$AI(t,e=this,s,i){const r=this.strings;let n=!1;if(void 0===r)t=G(this,t,e,0),n=!T(t)||t!==this._$AH&&t!==B,n&&(this._$AH=t);else{const i=t;let o,a;for(t=r[0],o=0;o<r.length-1;o++)a=G(this,i[s+o],e,o),a===B&&(a=this._$AH[o]),n||=!T(a)||a!==this._$AH[o],a===q?t=q:t!==q&&(t+=(a??"")+r[o+1]),this._$AH[o]=a}n&&!i&&this.j(t)}j(t){t===q?this.element.removeAttribute(this.name):this.element.setAttribute(this.name,t??"")}}class tt extends Y{constructor(){super(...arguments),this.type=3}j(t){this.element[this.name]=t===q?void 0:t}}class et extends Y{constructor(){super(...arguments),this.type=4}j(t){this.element.toggleAttribute(this.name,!!t&&t!==q)}}class st extends Y{constructor(t,e,s,i,r){super(t,e,s,i,r),this.type=5}_$AI(t,e=this){if((t=G(this,t,e,0)??q)===B)return;const s=this._$AH,i=t===q&&s!==q||t.capture!==s.capture||t.once!==s.once||t.passive!==s.passive,r=t!==q&&(s===q||i);i&&this.element.removeEventListener(this.name,this,s),r&&this.element.addEventListener(this.name,this,t),this._$AH=t}handleEvent(t){"function"==typeof this._$AH?this._$AH.call(this.options?.host??this.element,t):this._$AH.handleEvent(t)}}class it{constructor(t,e,s){this.element=t,this.type=6,this._$AN=void 0,this._$AM=e,this.options=s}get _$AU(){return this._$AM._$AU}_$AI(t){G(this,t)}}const rt=x.litHtmlPolyfillSupport;rt?.(Z,X),(x.litHtmlVersions??=[]).push("3.3.3");const nt=globalThis;class ot extends ${constructor(){super(...arguments),this.renderOptions={host:this},this._$Do=void 0}createRenderRoot(){const t=super.createRenderRoot();return this.renderOptions.renderBefore??=t.firstChild,t}update(t){const e=this.render();this.hasUpdated||(this.renderOptions.isConnected=this.isConnected),super.update(t),this._$Do=((t,e,s)=>{const i=s?.renderBefore??e;let r=i._$litPart$;if(void 0===r){const t=s?.renderBefore??null;i._$litPart$=r=new X(e.insertBefore(O(),t),t,void 0,s??{})}return r._$AI(t),r})(e,this.renderRoot,this.renderOptions)}connectedCallback(){super.connectedCallback(),this._$Do?.setConnected(!0)}disconnectedCallback(){super.disconnectedCallback(),this._$Do?.setConnected(!1)}render(){return B}}ot._$litElement$=!0,ot.finalized=!0,nt.litElementHydrateSupport?.({LitElement:ot});const at=nt.litElementPolyfillSupport;at?.({LitElement:ot}),(nt.litElementVersions??=[]).push("4.2.2");const ct={attribute:!0,type:String,converter:v,reflect:!1,hasChanged:b},lt=(t=ct,e,s)=>{const{kind:i,metadata:r}=s;let n=globalThis.litPropertyMetadata.get(r);if(void 0===n&&globalThis.litPropertyMetadata.set(r,n=new Map),"setter"===i&&((t=Object.create(t)).wrapped=!0),n.set(s.name,t),"accessor"===i){const{name:i}=s;return{set(s){const r=e.get.call(this);e.set.call(this,s),this.requestUpdate(i,r,t,!0,s)},init(e){return void 0!==e&&this.C(i,void 0,t,e),e}}}if("setter"===i){const{name:i}=s;return function(s){const r=this[i];e.call(this,s),this.requestUpdate(i,r,t,!0,s)}}throw Error("Unsupported decorator location: "+i)};function ht(t){return(e,s)=>"object"==typeof s?lt(t,e,s):((t,e,s)=>{const i=e.hasOwnProperty(s);return e.constructor.createProperty(s,t),i?Object.getOwnPropertyDescriptor(e,s):void 0})(t,e,s)}function dt(t){return ht({...t,state:!0,attribute:!1})}const pt="1.4.0",ut=[5,10,30];function _t(t){return t<10?"0"+t:String(t)}function ft(t){const e=Math.max(0,Math.floor(t)),s=Math.floor(e/3600),i=Math.floor(e%3600/60),r=e%60;return`${_t(s)}:${_t(i)}:${_t(r)}`}function mt(t){const e=t.trim();if(!e)return null;const s=e.split(/\s+/);let i=0;for(const t of s){if(!t)continue;const e=t.match(/^(\d+(?:\.\d+)?)\s*(小时|分钟|秒|[hms时分])?$/);if(!e)return null;const s=parseFloat(e[1]);switch(e[2]||"m"){case"h":case"时":case"小时":i+=3600*s;break;case"m":case"分":case"分钟":i+=60*s;break;case"s":case"秒":i+=s;break;default:return null}}return Math.max(0,Math.round(i))}function gt(t){let e,s;if("number"==typeof t)e=t,s=t+"分";else if("string"==typeof t){const i=mt(t);if(null===i)return null;const r=i/60;e=Number.isInteger(r)?r:i,s=t}else{if(!t||"object"!=typeof t)return null;if("number"==typeof t.minutes)e=t.minutes,s=t.label||t.minutes+"分";else{if("number"!=typeof t.seconds)return null;e=t.seconds,s=t.label||t.seconds+"秒"}}return{value:e,label:s}}function vt(t,e){const s=e||"toggle";switch(t.split(".")[0]){case"button":return{service:"button.press",target:{entity_id:t}};case"script":return{service:"script.turn_on",target:{entity_id:t}};case"scene":return{service:"scene.turn_on",target:{entity_id:t}};default:return{service:`homeassistant.${"on"===s?"turn_on":"off"===s?"turn_off":"toggle"}`,target:{entity_id:t}}}}console.info(`%c TIMER-SE-CARD %c v${pt} `,"color: orange; font-weight: bold; background: black","color: white; font-weight: bold; background: dimgray");let bt=class extends ot{constructor(){super(...arguments),this._config={},this._sliderValue=0,this._timeRemaining=null,this._state="idle",this._totalSeconds=0,this._remainingSeconds=0,this._endAt=0,this._firedAt=null,this._countdownInterval=null,this._storageKey="timer-se-card:default",this._valid=!1,this._presets=[]}static get version(){return pt}static getStubConfig(){return{entity:"",name:"定时器",action:"toggle",presets:[...ut],slider_max:60,autostart:!0}}static getConfigForm(){return{schema:[{name:"name",selector:{text:{}}},{name:"entity",required:!0,selector:{entity:{}}},{name:"action",selector:{select:{options:[{value:"toggle",label:"反转(toggle):开↔关"},{value:"on",label:"开启(turn_on)"},{value:"off",label:"关闭(turn_off)"}],mode:"dropdown"}}},{name:"slider_max",selector:{number:{min:1,max:1440,step:1,unit_of_measurement:"分钟"}}},{name:"presets",selector:{object:{multiple:!0,label_field:"minutes",fields:{minutes:{label:"分钟",selector:{number:{min:1,max:1440}}}}}}},{type:"expandable",name:"",title:"高级选项",schema:[{name:"autostart",selector:{boolean:{}}},{name:"color",selector:{text:{}}},{name:"event_type",selector:{text:{}}},{name:"event_data",selector:{object:{}}},{name:"actions",selector:{object:{multiple:!0,label_field:"service",fields:{service:{label:"服务",selector:{text:{}}},target:{label:"目标",selector:{object:{}}},data:{label:"数据",selector:{object:{}}}}}}}]}],computeLabel:t=>{switch(t.name){case"name":return"卡片标题";case"entity":return"倒计时结束后触发的实体";case"action":return"倒计时结束后的动作";case"slider_max":return"滑块最大时间";case"presets":return"预设时间";case"autostart":return"点击预设后立即开始";case"color":return"主题色(如 #ff8f00)";case"event_type":return"结束事件类型(可选)";case"event_data":return"结束事件数据(可选)";case"actions":return"自定义结束动作";default:return}},computeHelper:t=>{switch(t.name){case"entity":return"时间到后自动触发该实体(任意类型,不限制设备)";case"action":return"反转=切换开/关,也可固定为开启或关闭;按钮/脚本/场景类实体仍按各自动作触发";case"slider_max":return"拖动滑块可在该范围内设置时间";case"presets":return"仅需填写分钟数,标签会自动生成,点击卡片上的标签可一键跳转";case"actions":return"填写后优先于实体的自动动作,例如 service 填 button.press";case"color":return"留空则跟随 HA 主题";case"event_type":return"倒计时结束后向 HA 后端触发该事件(如 timer_finished),自动化可用 event trigger 监听";case"event_data":return'事件附带数据,例如 { "timer_id": "123456" }';default:return}}}}setConfig(t){const e={entity:void 0,action:"toggle",presets:[...ut],slider_max:60,autostart:!0,color:void 0,...t};"string"==typeof e.action&&(e.action=e.action.toLowerCase(),["toggle","on","off"].includes(e.action)||(e.action="toggle")),e.slider_max>0||(e.slider_max=60),this._presets=(e.presets||ut).map(gt).filter(t=>null!==t),this._config=e,this._valid=!!(e.entity||Array.isArray(e.actions)&&e.actions.length||e.action&&"object"==typeof e.action&&e.action.service||"string"==typeof e.event_type&&e.event_type.length>0),this._storageKey="timer-se-card:"+(e.entity||"default"),this._restoreState(),this.requestUpdate()}_applyTheme(){const t=this.hass;if(t){try{if("function"==typeof t.applyThemesOnElement)return void t.applyThemesOnElement(this,t.themes,this._config.theme)}catch(t){}t.themes&&t.themes.darkMode?this.setAttribute("data-theme","dark"):this.removeAttribute("data-theme")}}updated(t){t.has("hass")&&this._applyTheme()}connectedCallback(){super.connectedCallback(),this._applyTheme(),this._startCountdown()}disconnectedCallback(){super.disconnectedCallback(),this._stopCountdown(),this._saveState()}getCardSize(){return 6}getGridOptions(){return{rows:6,columns:6}}_restoreState(){let t=null;try{const e=localStorage.getItem(this._storageKey);e&&(t=JSON.parse(e))}catch(e){t=null}if(!t)return;const e=Date.now();"running"===t.state&&"number"==typeof t.endAt?t.endAt>e?(this._state="running",this._remainingSeconds=(t.endAt-e)/1e3,this._totalSeconds="number"==typeof t.total?t.total:this._remainingSeconds,this._endAt=t.endAt,this._firedAt=t.firedAt||null):(this._state="finished",this._remainingSeconds=0,this._totalSeconds="number"==typeof t.total?t.total:0,this._firedAt=t.firedAt||null):"paused"===t.state?(this._state="paused",this._remainingSeconds="number"==typeof t.remaining?t.remaining:0,this._totalSeconds="number"==typeof t.total?t.total:this._remainingSeconds):"idle"!==t.state&&"finished"!==t.state||(this._state=t.state,this._remainingSeconds="number"==typeof t.remaining?t.remaining:0,this._totalSeconds="number"==typeof t.total?t.total:this._remainingSeconds),"number"==typeof t.sliderValue&&(this._sliderValue=t.sliderValue)}_saveState(){const t={state:this._state,remaining:Math.round(this._remainingSeconds),total:this._totalSeconds,endAt:this._endAt,firedAt:this._firedAt,sliderValue:this._sliderValue};try{localStorage.setItem(this._storageKey,JSON.stringify(t))}catch(t){}}_setTime(t){this._stopCountdown(),this._remainingSeconds=Math.max(0,t),this._totalSeconds=this._remainingSeconds,this._endAt=0,this._state="idle",this._firedAt=null,this._saveState(),this._config.autostart&&this._remainingSeconds>0?this._start():this._updateRender()}_start(){this._remainingSeconds<=0||(this._state="running",this._endAt=Date.now()+1e3*this._remainingSeconds,this._startCountdown(),this._saveState())}_pause(){"running"===this._state&&(this._stopCountdown(),this._state="paused",this._endAt=0,this._saveState(),this._updateRender())}_resume(){"paused"!==this._state||this._remainingSeconds<=0||this._start()}_reset(){this._stopCountdown(),this._state="idle",this._remainingSeconds=0,this._totalSeconds=0,this._endAt=0,this._firedAt=null,this._saveState(),this._updateRender()}_toggle(){switch(this._state){case"running":this._pause();break;case"paused":this._resume();break;case"finished":this._reset();break;default:this._remainingSeconds>0&&this._start()}}_tick(){this._remainingSeconds=Math.max(0,(this._endAt-Date.now())/1e3),this._remainingSeconds<=0?this._finish():this._updateRender()}_finish(){this._stopCountdown(),this._state="finished",this._remainingSeconds=0,this._endAt=0,this._firedAt||(this._firedAt=Date.now(),this._fireActions()),this._saveState(),this._updateRender()}_startCountdown(){this._stopCountdown(),"running"===this._state&&(this._countdownInterval=setInterval(()=>this._tick(),500),this._tick())}_stopCountdown(){this._countdownInterval&&(clearInterval(this._countdownInterval),this._countdownInterval=null)}_setFromInput(){const t=this.shadowRoot?.querySelector(".tse-input");if(!t)return;const e=mt(t.value);if(null===e||e<=0)return t.classList.add("is-invalid"),void setTimeout(()=>t.classList.remove("is-invalid"),800);t.classList.remove("is-invalid"),this._setTime(e)}_handleSliderChange(t){const e=t.target;this._sliderValue=parseInt(e.value,10)||0,this._setTime(60*this._sliderValue)}_resolveActions(){const t=this._config;if(Array.isArray(t.actions)&&t.actions.length)return t.actions.filter(t=>t&&"string"==typeof t.service);if(t.action&&"object"==typeof t.action&&t.action.service)return[t.action];if(t.entity){const e="string"==typeof t.action?t.action:"toggle";return[vt(t.entity,e)]}return[]}_fireActions(){const t=this._resolveActions();t.forEach(t=>{const e=t.service.indexOf(".");if(e<=0)return void console.error("timer-se-card: 无效的 service "+t.service);const s=t.service.substring(0,e),i=t.service.substring(e+1);try{this.hass&&"function"==typeof this.hass.callService?this.hass.callService(s,i,t.data||{},t.target||{}):console.warn("timer-se-card: hass 尚未就绪,跳过动作 "+t.service)}catch(e){console.error("timer-se-card: 调用 "+t.service+" 失败",e)}});const e=this._config.event_type;if(e&&this.hass?.connection)try{this.hass.connection.sendMessagePromise({type:"fire_event",event_type:e,event_data:this._config.event_data||{}})}catch(t){console.error("timer-se-card: 触发事件 "+e+" 失败",t)}this.dispatchEvent(new CustomEvent("timer-se-card-finished",{detail:{config:this._config,actions:t},bubbles:!0,composed:!0}))}_entityState(){const t=this._config.entity;return t&&this.hass&&this.hass.states&&this.hass.states[t]||null}_isEntityOn(){const t=this._entityState();return!!t&&("on"===t.state||"open"===t.state)}_statusText(){switch(this._state){case"running":return"倒计时中";case"paused":return"已暂停";case"finished":return"时间到!";default:return this._remainingSeconds>0?ft(this._remainingSeconds):"待机"}}_activeBlocks(){if("finished"===this._state)return 0;if(this._totalSeconds<=0)return 0;const t=Math.max(0,Math.min(1,this._remainingSeconds/this._totalSeconds));return"running"===this._state||"paused"===this._state?t>0?Math.max(1,Math.ceil(16*t)):0:Math.ceil(16*t)}_controlIcon(){switch(this._state){case"running":return"mdi:pause";case"paused":default:return"mdi:play";case"finished":return"mdi:restart"}}_updateRender(){this._timeRemaining="finished"===this._state?"00:00:00":ft(this._remainingSeconds),this.requestUpdate()}render(){if(!this._config||!this._valid)return V`<div class="tse-hint">请配置「结束时要触发的实体」或「结束事件类型」或「自定义结束动作」后使用本卡片。</div>`;const t=this._config,e=this._entityState(),s=e?e.attributes.friendly_name||t.entity:null,i=t.name||s||"定时器",r=this._isEntityOn(),n="running"===this._state,o="finished"===this._state?"00:00:00":ft(this._remainingSeconds),a=this._activeBlocks(),c=Array.from({length:16},(t,e)=>{const s=e<a;return V`<div class="tse-block ${s?"is-on":""} ${n&&s&&e===a-1?"is-lead":""}"></div>`}),l=this._presets.map(t=>{const e="running"===this._state&&this._totalSeconds>0&&Math.abs(this._totalSeconds-60*t.value)<1.5;return V`<button class="tse-preset ${e?"is-active":""}" @click=${()=>this._setTime(60*t.value)}>${t.label}</button>`}),h=t.slider_max||60,d=Math.min(this._sliderValue,h),p="idle"!==this._state||this._totalSeconds>0;return V`
+      <ha-card class="tse-card">
+        <div class="tse-header">
+          <span class="tse-title">${i}</span>
+          ${e?V`<span class="tse-chip ${r?"is-on":"is-off"}" title="${t.entity}">${r?"开":"关"}</span>`:""}
+          <span class="tse-status">${this._statusText()}</span>
+        </div>
+
+        <div class="tse-countdown ${n?"is-active":""}">
+          <div class="tse-time">${o}</div>
+        </div>
+
+        <div class="tse-blocks">${c}</div>
+
+        <div class="tse-slider-row">
+          <input class="tse-slider" type="range" min="0" step="1" max="${h}" value="${d}" @input=${this._handleSliderChange} />
+          <div class="tse-slider-right">
+            <span class="tse-slider-label">${d} 分钟</span>
+            <div class="tse-control-btn ${n?"is-active":""}" @click=${()=>this._toggle()}>
+              <ha-icon icon="${this._controlIcon()}"></ha-icon>
+            </div>
           </div>
+        </div>
 
-          <div class="tse-dial">
-            <svg class="tse-svg" viewBox="0 0 ${SVG_SIZE} ${SVG_SIZE}">
-              <circle class="tse-track" cx="${CENTER}" cy="${CENTER}" r="${CENTER - ringWidth / 2}" stroke-width="${ringWidth}"></circle>
-              <circle class="tse-progress ${this._state === 'finished' ? 'is-finished' : ''}" cx="${CENTER}" cy="${CENTER}" r="${CENTER - ringWidth / 2}" stroke-width="${ringWidth}"
-                stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}" transform="rotate(-90 ${CENTER} ${CENTER})"></circle>
-              <line class="tse-hand" x1="${CENTER}" y1="${CENTER}" x2="${knobX}" y2="${knobY}"></line>
-              <circle class="tse-knob" cx="${knobX}" cy="${knobY}" r="${Math.max(8, ringWidth * 0.8)}"></circle>
-              <circle class="tse-dial-hit" cx="${CENTER}" cy="${CENTER}" r="${CENTER - ringWidth / 2}" stroke-width="${ringWidth * 3}"></circle>
-            </svg>
+        ${l.length?V`<div class="tse-presets">${l}</div>`:""}
 
-            <button class="tse-center" data-action="center">
-              <span class="tse-time">${timeText}</span>
-              <span class="tse-center-label">${this._escape(centerButtonLabel)}</span>
-            </button>
-          </div>
-
-          <div class="tse-presets" ${presetsHtml ? "" : 'style="display:none"'}>
-            ${presetsHtml}
-          </div>
-
-          <div class="tse-input-row">
-            <input class="tse-input" type="text" placeholder="输入时间:如 5 / 30s / 1h 30m" />
-            <button class="tse-btn tse-btn-main" data-action="set-time">${this._escape(text.set)}</button>
-          </div>
-
-          <div class="tse-controls">
-            <button class="tse-btn tse-btn-main ${showCenter ? "" : "is-hidden"}" data-action="center">${this._escape(centerButtonLabel)}</button>
-            <button class="tse-btn ${showReset ? "" : "is-hidden"}" data-action="reset">${this._escape(text.reset)}</button>
-          </div>
-        </ha-card>
-      `;
-
-      this._svg = this.shadowRoot.querySelector(".tse-svg");
+        <div class="tse-input-row">
+          <input class="tse-input" type="text" placeholder="如 5 / 30s / 1h 30m" @keydown=${t=>"Enter"===t.key&&this._setFromInput()} />
+          <button class="tse-set-btn" @click=${()=>this._setFromInput()}>设置</button>
+          ${p?V`<button class="tse-set-btn is-ghost" @click=${()=>this._reset()}>重置</button>`:""}
+        </div>
+      </ha-card>
+    `}};bt.styles=((t,...e)=>{const s=1===t.length?t[0]:e.reduce((e,s,i)=>e+(t=>{if(!0===t._$cssResult$)return t.cssText;if("number"==typeof t)return t;throw Error("Value passed to 'css' function must be a 'css' function result: "+t+". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.")})(s)+t[i+1],t[0]);return new n(s,t,i)})`
+    :host {
+      display: block;
+      --tse-accent: var(--accent-color, #ff8f00);
     }
-
-    _escape(str) {
-      return String(str == null ? "" : str)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
+    .tse-card {
+      font-family: var(--primary-font-family, "Roboto", sans-serif);
+      color: var(--primary-text-color, #1c1c1e);
+      background: var(--ha-card-background, var(--card-background-color, #fff));
+      border-radius: var(--ha-card-border-radius, 12px);
+      border: 1px solid var(--ha-card-border-color, var(--divider-color, #e0e0e0));
+      box-shadow: var(--ha-card-box-shadow, none);
+      padding: 14px 16px 16px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      user-select: none;
+      -webkit-user-select: none;
+      width: 100%;
     }
-
-    _attachEvents() {
-      this._clickHandler = (e) => {
-        const target = e.target.closest("[data-action]");
-        if (target) {
-          const action = target.getAttribute("data-action");
-          if (action === "center") this._toggleCenter();
-          else if (action === "reset") this._reset();
-          else if (action === "set-time") this._setFromInput();
-          return;
-        }
-        const preset = e.target.closest("[data-seconds]");
-        if (preset) {
-          this._setPreset(Number(preset.getAttribute("data-seconds")), preset.textContent);
-        }
-      };
-
-      this._inputKeydown = (e) => {
-        if (e.key === "Enter") this._setFromInput();
-      };
-
-      this._pointerDown = (e) => {
-        if (e.target.closest(".tse-dial-hit")) this._onPointerDown(e);
-      };
-      this._pointerMove = (e) => this._onPointerMove(e);
-      this._pointerUp = (e) => this._onPointerUp(e);
-
-      this.shadowRoot.addEventListener("click", this._clickHandler);
-      this.shadowRoot.addEventListener("keydown", this._inputKeydown);
-      this.shadowRoot.addEventListener("pointerdown", this._pointerDown);
-      this.shadowRoot.addEventListener("pointermove", this._pointerMove);
-      this.shadowRoot.addEventListener("pointerup", this._pointerUp);
-      this.shadowRoot.addEventListener("pointercancel", this._pointerUp);
+    :host([data-theme="dark"]) .tse-card {
+      background: var(--ha-card-background, var(--card-background-color, #1c1c1e));
+      color: var(--primary-text-color, #e1e1e1);
+      border-color: var(--ha-card-border-color, var(--divider-color, #3a3a3a));
     }
-
-    _detachEvents() {
-      this.shadowRoot.removeEventListener("click", this._clickHandler);
-      this.shadowRoot.removeEventListener("keydown", this._inputKeydown);
-      this.shadowRoot.removeEventListener("pointerdown", this._pointerDown);
-      this.shadowRoot.removeEventListener("pointermove", this._pointerMove);
-      this.shadowRoot.removeEventListener("pointerup", this._pointerUp);
-      this.shadowRoot.removeEventListener("pointercancel", this._pointerUp);
+    .tse-hint {
+      font-family: var(--primary-font-family, "Roboto", sans-serif);
+      background: var(--ha-card-background, var(--card-background-color, #fff));
+      color: var(--primary-text-color, #1c1c1e);
+      border-radius: var(--ha-card-border-radius, 12px);
+      border: 1px solid var(--ha-card-border-color, var(--divider-color, #e0e0e0));
+      padding: 20px;
+      font-size: 14px;
+      line-height: 1.6;
     }
-
-    static get _style() {
-      return `
-        :host {
-          display: block;
-          --tse-accent: var(--accent-color, #ff8f00);
-          --tse-track: var(--divider-color, rgba(128, 128, 128, 0.24));
-          --tse-on-accent: var(--text-primary-color, #fff);
-        }
-        .tse-card {
-          font-family: var(--primary-font-family, "Roboto", sans-serif);
-          color: var(--primary-text-color, #1c1c1e);
-          background: var(--ha-card-background, var(--card-background-color, #fff));
-          border-radius: var(--ha-card-border-radius, 12px);
-          border: 1px solid var(--ha-card-border-color, var(--divider-color, #e0e0e0));
-          box-shadow: var(--ha-card-box-shadow, none);
-          padding: 16px;
-          box-sizing: border-box;
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-          user-select: none;
-          -webkit-user-select: none;
-          width: 100%;
-        }
-        :host([data-theme="dark"]) .tse-card {
-          background: var(--ha-card-background, var(--card-background-color, #1c1c1e));
-          color: var(--primary-text-color, #e1e1e1);
-          border-color: var(--ha-card-border-color, var(--divider-color, #3a3a3a));
-        }
-        .tse-header {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          min-height: 20px;
-        }
-        .tse-title {
-          font-size: 16px;
-          font-weight: 500;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .tse-chip {
-          font-size: 11px;
-          line-height: 1;
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-weight: 500;
-          color: var(--text-primary-color, #fff);
-        }
-        .tse-chip.is-on {
-          background: var(--success-color, #43a047);
-        }
-        .tse-chip.is-off {
-          background: var(--disabled-text-color, #9e9e9e);
-        }
-        .tse-status {
-          margin-left: auto;
-          font-size: 12px;
-          color: var(--secondary-text-color, #727272);
-        }
-        .tse-dial {
-          position: relative;
-          width: 100%;
-          max-width: 340px;
-          margin: 0 auto;
-          container-type: inline-size;
-        }
-        .tse-svg {
-          display: block;
-          width: 100%;
-          height: auto;
-          overflow: visible;
-          touch-action: none;
-        }
-        .tse-track {
-          fill: none;
-          stroke: var(--tse-track);
-        }
-        .tse-progress {
-          fill: none;
-          stroke: var(--tse-accent);
-          stroke-linecap: round;
-          transition: stroke-dashoffset 0.2s linear;
-        }
-        .tse-progress.is-finished {
-          animation: tse-pulse 1s ease-in-out infinite;
-        }
-        .tse-hand {
-          stroke: var(--tse-accent);
-          stroke-width: 3;
-          stroke-linecap: round;
-          transition: all 0.2s linear;
-        }
-        .tse-knob {
-          fill: var(--tse-accent);
-          stroke: var(--tse-on-accent);
-          stroke-width: 2;
-          transition: all 0.2s linear;
-        }
-        .tse-dial-hit {
-          fill: none;
-          stroke: transparent;
-          cursor: pointer;
-        }
-        @keyframes tse-pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.35; }
-        }
-        .tse-center {
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          width: 54%;
-          height: 54%;
-          border-radius: 50%;
-          border: none;
-          background: transparent;
-          color: var(--primary-text-color, #1c1c1e);
-          cursor: pointer;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          padding: 0;
-          font-family: inherit;
-        }
-        .tse-center:hover {
-          background: var(--divider-color, rgba(128, 128, 128, 0.12));
-        }
-        .tse-time {
-          font-size: clamp(20px, 11.5cqw, 38px);
-          font-weight: 500;
-          font-variant-numeric: tabular-nums;
-          letter-spacing: 0.5px;
-        }
-        .tse-center-label {
-          font-size: 12px;
-          color: var(--secondary-text-color, #727272);
-        }
-        .tse-presets {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          justify-content: center;
-        }
-        .tse-preset {
-          border: 1px solid var(--tse-accent);
-          color: var(--tse-accent);
-          background: transparent;
-          border-radius: 999px;
-          padding: 6px 16px;
-          font-size: 13px;
-          cursor: pointer;
-          font-family: inherit;
-          transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-        }
-        .tse-preset:hover {
-          background: var(--tse-accent);
-          color: var(--tse-on-accent);
-        }
-        .tse-preset.is-active {
-          background: var(--tse-accent);
-          color: var(--tse-on-accent);
-          font-weight: 500;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-        }
-        .tse-input-row {
-          display: flex;
-          gap: 8px;
-          align-items: center;
-          justify-content: center;
-        }
-        .tse-input {
-          flex: 1;
-          max-width: 220px;
-          height: 40px;
-          padding: 0 14px;
-          border: 1px solid var(--divider-color, rgba(128, 128, 128, 0.4));
-          border-radius: 20px;
-          background: transparent;
-          color: var(--primary-text-color, #1c1c1e);
-          font-size: 14px;
-          font-family: inherit;
-          outline: none;
-        }
-        .tse-input:focus {
-          border-color: var(--tse-accent);
-        }
-        .tse-input.is-invalid {
-          border-color: var(--error-color, #db4437);
-        }
-        .tse-controls {
-          display: flex;
-          gap: 8px;
-          justify-content: center;
-        }
-        .tse-btn {
-          height: 40px;
-          min-width: 96px;
-          padding: 0 20px;
-          border-radius: 20px;
-          border: 1px solid var(--tse-accent);
-          background: transparent;
-          color: var(--tse-accent);
-          font-size: 14px;
-          font-weight: 500;
-          font-family: inherit;
-          cursor: pointer;
-          transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-        }
-        .tse-btn:hover {
-          background: color-mix(in srgb, var(--tse-accent) 10%, transparent);
-        }
-        .tse-btn-main {
-          background: var(--tse-accent);
-          color: var(--tse-on-accent);
-          border-color: var(--tse-accent);
-        }
-        .tse-btn-main:hover {
-          background: var(--tse-accent);
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-        }
-        .is-hidden {
-          display: none !important;
-        }
-      `;
+    .tse-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 20px;
     }
-  }
-
-  customElements.define("timer-se-card", TimerSeCard);
-
-  window.customCards = window.customCards || [];
-  window.customCards.push({
-    type: "timer-se-card",
-    name: "Timer SE Card",
-    description: "圆形旋转倒计时定时器卡片:预设时间一键跳转,倒计时结束自动触发实体/按钮",
-    documentationURL: "https://github.com/xhyyd2022/ha-timer-se-card",
-    preview: true,
-  });
-})();
+    .tse-title {
+      font-size: 16px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tse-chip {
+      font-size: 11px;
+      line-height: 1;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-weight: 500;
+      color: var(--text-primary-color, #fff);
+    }
+    .tse-chip.is-on {
+      background: var(--success-color, #43a047);
+    }
+    .tse-chip.is-off {
+      background: var(--disabled-text-color, #9e9e9e);
+    }
+    .tse-status {
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--secondary-text-color, #727272);
+    }
+    .tse-countdown {
+      text-align: center;
+    }
+    .tse-time {
+      font-size: clamp(2rem, 12vw, 3.2rem);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 1px;
+      line-height: 1.2;
+      white-space: nowrap;
+      color: var(--primary-text-color, #1c1c1e);
+    }
+    .tse-countdown.is-active .tse-time {
+      color: var(--tse-accent);
+    }
+    .tse-blocks {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      width: 100%;
+      max-width: 280px;
+      margin: 0 auto;
+      box-sizing: border-box;
+    }
+    .tse-block {
+      flex: 1 1 0;
+      min-width: 0;
+      height: 16px;
+      border-radius: 4px;
+      background-color: var(--divider-color, rgba(160, 160, 160, 0.25));
+      opacity: 0.5;
+      transition: background-color 0.4s linear, opacity 0.4s linear;
+    }
+    .tse-block.is-on {
+      background-color: var(--tse-accent);
+      opacity: 1;
+    }
+    .tse-block.is-lead {
+      box-shadow: 0 0 12px var(--tse-accent);
+    }
+    .tse-slider-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .tse-slider {
+      flex: 1;
+      min-width: 100px;
+      height: 16px;
+      margin: 0;
+      -webkit-appearance: none;
+      appearance: none;
+      background: var(--secondary-background-color, rgba(128, 128, 128, 0.2));
+      border-radius: 20px;
+      outline: none;
+    }
+    .tse-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--tse-accent);
+      cursor: pointer;
+      border: 2px solid var(--text-primary-color, #fff);
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.25);
+      transition: transform 0.15s ease;
+    }
+    .tse-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.08);
+    }
+    .tse-slider::-moz-range-thumb {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--tse-accent);
+      cursor: pointer;
+      border: 2px solid var(--text-primary-color, #fff);
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.25);
+    }
+    .tse-slider-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    .tse-slider-label {
+      font-size: 1.05em;
+      color: var(--primary-text-color, #1c1c1e);
+      min-width: 52px;
+      text-align: center;
+    }
+    .tse-control-btn {
+      width: 46px;
+      height: 40px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      background-color: var(--secondary-background-color, rgba(128, 128, 128, 0.2));
+      color: var(--tse-accent);
+      --mdc-icon-size: 24px;
+      transition: background-color 0.2s, box-shadow 0.2s;
+      flex-shrink: 0;
+    }
+    .tse-control-btn:hover {
+      box-shadow: 0 0 10px var(--tse-accent);
+    }
+    .tse-control-btn.is-active {
+      box-shadow: 0 0 10px var(--tse-accent);
+    }
+    .tse-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+    }
+    .tse-preset {
+      min-width: 64px;
+      height: 38px;
+      padding: 0 12px;
+      border: none;
+      border-radius: 8px;
+      background-color: var(--secondary-background-color, rgba(128, 128, 128, 0.2));
+      color: var(--primary-text-color, #1c1c1e);
+      font-size: 14px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background-color 0.2s, box-shadow 0.2s;
+    }
+    .tse-preset:hover {
+      box-shadow: 0 0 8px var(--tse-accent);
+    }
+    .tse-preset.is-active {
+      background-color: var(--tse-accent);
+      color: var(--text-primary-color, #fff);
+      box-shadow: 0 0 8px var(--tse-accent);
+    }
+    .tse-input-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+    }
+    .tse-input {
+      flex: 1;
+      max-width: 180px;
+      height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--divider-color, rgba(128, 128, 128, 0.4));
+      border-radius: 8px;
+      background: transparent;
+      color: var(--primary-text-color, #1c1c1e);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+    }
+    .tse-input:focus {
+      border-color: var(--tse-accent);
+    }
+    .tse-input.is-invalid {
+      border-color: var(--error-color, #db4437);
+    }
+    .tse-set-btn {
+      height: 36px;
+      padding: 0 16px;
+      border: none;
+      border-radius: 8px;
+      background: var(--tse-accent);
+      color: var(--text-primary-color, #fff);
+      font-size: 14px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .tse-set-btn:hover {
+      opacity: 0.88;
+    }
+    .tse-set-btn.is-ghost {
+      background: transparent;
+      border: 1px solid var(--divider-color, rgba(128, 128, 128, 0.4));
+      color: var(--primary-text-color, #1c1c1e);
+    }
+  `,t([ht({attribute:!1})],bt.prototype,"hass",void 0),t([dt()],bt.prototype,"_config",void 0),t([dt()],bt.prototype,"_sliderValue",void 0),t([dt()],bt.prototype,"_timeRemaining",void 0),t([dt()],bt.prototype,"_state",void 0),t([dt()],bt.prototype,"_totalSeconds",void 0),bt=t([(t=>(e,s)=>{void 0!==s?s.addInitializer(()=>{customElements.define(t,e)}):customElements.define(t,e)})("timer-se-card")],bt),window.customCards=window.customCards||[],window.customCards.some(t=>"timer-se-card"===t.type)||window.customCards.push({type:"timer-se-card",name:"Timer SE Card",description:"倒计时定时器卡片:滑块拖动/预设/输入设置时间,倒计时结束自动触发实体",preview:!0,documentationURL:"https://github.com/xhyyd2022/ha-timer-se-card"});export{bt as TimerSeCard};
