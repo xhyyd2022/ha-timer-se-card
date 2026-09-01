@@ -138,7 +138,7 @@ actions:
 ## 开发
 
 ```bash
-npm run build   # 将 src/timer-se-card.js 打包到 dist/ha-timer-se-card.js
+npm run build   # 将 src/timer-se-card.ts 打包到 dist/ha-timer-se-card.js
 ```
 
 ## 支持
