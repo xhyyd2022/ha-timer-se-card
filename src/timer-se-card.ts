@@ -851,12 +851,17 @@ export class TimerSeCard extends LitElement {
       unit === "sec" ? "秒" : unit === "hr" ? "小时" : "分钟";
     const maxValue = (config.slider_max as number) || DEFAULT_MAX_MINUTES;
     const sliderVal = Math.min(this._sliderValue, maxValue);
+    const fillPercent = maxValue > 0 ? Math.round((sliderVal / maxValue) * 100) : 0;
     const showSlider = !config.hide_slider;
     const showManualInput = config.show_manual_input === true;
     const showReset = this._state !== "idle" || this._totalSeconds > 0;
 
+    const accentStyle = config.color
+      ? `--tse-accent:${config.color}`
+      : "";
+
     return html`
-      <ha-card class="tse-card">
+      <ha-card class="tse-card" style="${accentStyle}">
         <div class="tse-header">
           <span class="tse-title">${headerTitle}</span>
           ${entity
@@ -884,7 +889,7 @@ export class TimerSeCard extends LitElement {
 
         ${showSlider
           ? html`<div class="tse-slider-row">
-              <input class="tse-slider" type="range" min="0" step="1" max="${maxValue}" value="${sliderVal}" @input=${this._handleSliderChange} />
+              <input class="tse-slider" type="range" min="0" step="1" max="${maxValue}" value="${sliderVal}" style="--tse-fill:${fillPercent}%" @input=${this._handleSliderChange} />
               <div class="tse-slider-right">
                 <span class="tse-slider-label">${sliderVal} ${unitLabel}</span>
                 <div class="tse-control-btn ${isActive ? "is-active" : ""}" @click=${() => this._toggle()}>
@@ -910,7 +915,8 @@ export class TimerSeCard extends LitElement {
   static styles = css`
     :host {
       display: block;
-      --tse-accent: var(--accent-color, #ff8f00);
+      /* 主题色:优先用户自定义 color,否则跟随 HA 主色(--primary-color,与上游一致) */
+      --tse-accent: var(--primary-color);
     }
     .tse-card {
       font-family: var(--primary-font-family, "Roboto", sans-serif);
@@ -1039,7 +1045,14 @@ export class TimerSeCard extends LitElement {
       margin: 0;
       -webkit-appearance: none;
       appearance: none;
-      background: var(--secondary-background-color, rgba(128, 128, 128, 0.2));
+      /* 左侧已填充区:主题色固定减淡;右侧:灰色底 */
+      background: linear-gradient(
+        to right,
+        color-mix(in srgb, var(--tse-accent) 30%, transparent) 0%,
+        color-mix(in srgb, var(--tse-accent) 30%, transparent) var(--tse-fill, 0%),
+        var(--secondary-background-color, rgba(128, 128, 128, 0.25)) var(--tse-fill, 0%),
+        var(--secondary-background-color, rgba(128, 128, 128, 0.25)) 100%
+      );
       border-radius: 20px;
       outline: none;
     }
