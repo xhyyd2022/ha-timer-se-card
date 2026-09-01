@@ -82,7 +82,7 @@
 
   class TimerSeCard extends HTMLElement {
     static get version() {
-      return "1.1.0";
+      return "1.2.0";
     }
 
     static getStubConfig() {
@@ -97,10 +97,6 @@
         max_minutes: 60,
         autostart: true,
       };
-    }
-
-    static getConfigElement() {
-      return document.createElement("timer-se-card-editor");
     }
 
     static getConfigForm() {
@@ -774,7 +770,7 @@
             --tse-accent: ${color};
           }
         </style>
-        <div class="tse-card" style="--tse-size:${size}px">
+        <ha-card class="tse-card" style="--tse-size:${size}px">
           <div class="tse-header">
             <span class="tse-title">${this._escape(headerTitle)}</span>
             ${headerChip}
@@ -805,7 +801,7 @@
             <button class="tse-btn tse-btn-main ${showCenter ? "" : "is-hidden"}" data-action="center">${this._escape(centerButtonLabel)}</button>
             <button class="tse-btn ${showReset ? "" : "is-hidden"}" data-action="reset">${this._escape(text.reset)}</button>
           </div>
-        </div>
+        </ha-card>
       `;
 
       this._svg = this.shadowRoot.querySelector(".tse-svg");
@@ -865,10 +861,7 @@
         }
         .tse-card {
           font-family: var(--primary-font-family, "Roboto", sans-serif);
-          background: var(--ha-card-background, var(--card-background-color, #fff));
           color: var(--primary-text-color, #1c1c1e);
-          border-radius: var(--ha-card-border-radius, 12px);
-          box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0, 0, 0, 0.15));
           padding: 16px;
           box-sizing: border-box;
           display: flex;
@@ -876,6 +869,7 @@
           gap: 12px;
           user-select: none;
           -webkit-user-select: none;
+          width: 100%;
         }
         .tse-header {
           display: flex;
@@ -1050,358 +1044,6 @@
       `;
     }
   }
-
-  /* ---------------- config editor ---------------- */
-
-  class TimerSeCardEditor extends HTMLElement {
-    constructor() {
-      super();
-      this._config = {};
-      this._hass = null;
-    }
-
-    setConfig(config) {
-      this._config = { ...config };
-      this._render();
-    }
-
-    set hass(hass) {
-      this._hass = hass;
-      const picker = this.querySelector("ha-entity-picker");
-      if (picker) {
-        picker.hass = hass;
-      }
-    }
-
-    connectedCallback() {
-      if (this.childElementCount === 0) {
-        this._render();
-      }
-    }
-
-    _dispatch() {
-      const event = new Event("config-changed", {
-        bubbles: true,
-        composed: true,
-      });
-      event.detail = { config: this._config };
-      this.dispatchEvent(event);
-    }
-
-    _defaultPresets() {
-      return [
-        { label: "5分", minutes: 5 },
-        { label: "10分", minutes: 10 },
-        { label: "30分", minutes: 30 },
-      ];
-    }
-
-    _render() {
-      const c = this._config || {};
-      const presets =
-        Array.isArray(c.presets) && c.presets.length
-          ? c.presets.map((p) => ({ ...p }))
-          : this._defaultPresets();
-
-      this.innerHTML = `
-        <style>
-          .tse-editor {
-            font-family: var(--primary-font-family, "Roboto", sans-serif);
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            padding: 4px 0;
-          }
-          .tse-editor .row {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-          }
-          .tse-editor .inline {
-            display: flex;
-            gap: 12px;
-            align-items: flex-end;
-          }
-          .tse-editor .inline > * {
-            flex: 1;
-            min-width: 0;
-          }
-          .tse-editor .preset-row {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-          }
-          .tse-editor .preset-row mwc-textfield {
-            flex: 1;
-          }
-          .tse-editor .preset-row .min-input {
-            flex: 0 0 120px;
-          }
-          .tse-editor .row-title {
-            font-size: 14px;
-            font-weight: 500;
-            margin: 8px 0 0;
-          }
-          .tse-editor ha-switch {
-            display: flex;
-          }
-          .tse-editor .label {
-            font-size: 12px;
-            color: var(--secondary-text-color, #727272);
-          }
-        </style>
-        <div class="tse-editor">
-          <div class="row">
-            <span class="label">卡片标题(可选)</span>
-            <mwc-textfield data-field="name" label="标题" .value="${this._escape(c.name || "")}"></mwc-textfield>
-          </div>
-
-          <div class="row">
-            <span class="label">倒计时结束时要触发的实体(按钮/开关/灯等)</span>
-            <ha-entity-picker
-              data-field="entity"
-              .value="${this._escape(c.entity || "")}"
-              include-domains="button,switch,input_boolean,light,fan,cover,script,automation,scene,media_player,climate"
-              allow-custom-entity></ha-entity-picker>
-          </div>
-
-          <div class="inline">
-            <div class="row">
-              <span class="label">最大可设置时间(分钟)</span>
-              <mwc-textfield data-field="max_minutes" type="number" min="1" .value="${this._escape(String(c.max_minutes || 60))}"></mwc-textfield>
-            </div>
-            <div class="row">
-              <span class="label">表盘尺寸(px)</span>
-              <mwc-textfield data-field="size" type="number" min="160" .value="${this._escape(String(c.size || 260))}"></mwc-textfield>
-            </div>
-            <div class="row">
-              <span class="label">圆环粗细(px)</span>
-              <mwc-textfield data-field="ring_width" type="number" min="4" .value="${this._escape(String(c.ring_width || 14))}"></mwc-textfield>
-            </div>
-          </div>
-
-          <div class="row">
-            <span class="label">主题色</span>
-            <input type="color" data-field="color" .value="${this._escape(c.color || "#ff8f00")}" style="width:48px;height:32px;border:none;background:none;cursor:pointer;">
-          </div>
-
-          <div class="row">
-            <ha-switch data-field="autostart" ?checked="${!!c.autostart}" label="点击预设后立即开始倒计时"></ha-switch>
-          </div>
-
-          <div class="row">
-            <div class="row-title">预设时间(点击卡片上的标签可一键跳转)</div>
-            <div class="preset-list">
-              ${presets
-                .map(
-                  (p, i) => `
-                    <div class="preset-row" data-index="${i}">
-                      <mwc-textfield data-preset-label label="名称" .value="${this._escape(p.label || "")}"></mwc-textfield>
-                      <mwc-textfield class="min-input" data-preset-minutes type="number" min="1" label="分钟" .value="${this._escape(String(p.minutes != null ? p.minutes : Math.round((p.seconds || 0) / 60)))}"></mwc-textfield>
-                      <mwc-button data-remove-preset class="remove-btn" label="移除"></mwc-button>
-                    </div>`
-                )
-                .join("")}
-            </div>
-            <div>
-              <mwc-button data-add-preset label="添加预设"></mwc-button>
-            </div>
-          </div>
-
-          <div class="row">
-            <span class="label">高级:自定义结束动作(JSON,可选,填写后优先于实体自动动作)</span>
-            <mwc-textfield data-field="actions_raw" label='[{"service":"button.press","target":{"entity_id":"button.xxx"}}]' .value="${this._escape(this._actionsToJson(c))}"></mwc-textfield>
-          </div>
-        </div>
-      `;
-
-      this._bind();
-    }
-
-    _actionsToJson(c) {
-      if (Array.isArray(c.actions) && c.actions.length) {
-        return JSON.stringify(c.actions);
-      }
-      if (c.action && typeof c.action.service === "string") {
-        return JSON.stringify([c.action]);
-      }
-      return "";
-    }
-
-    _bind() {
-      const c = this._config || {};
-
-      const nameEl = this.querySelector('[data-field="name"]');
-      if (nameEl) {
-        nameEl.addEventListener("input", () => {
-          c.name = nameEl.value;
-          this._dispatch();
-        });
-      }
-
-      const picker = this.querySelector('[data-field="entity"]');
-      if (picker) {
-        picker.hass = this._hass;
-        picker.addEventListener("value-changed", (e) => {
-          c.entity = e.detail.value;
-          this._dispatch();
-        });
-      }
-
-      const maxEl = this.querySelector('[data-field="max_minutes"]');
-      if (maxEl) {
-        maxEl.addEventListener("input", () => {
-          c.max_minutes = Number(maxEl.value);
-          this._dispatch();
-        });
-      }
-
-      const sizeEl = this.querySelector('[data-field="size"]');
-      if (sizeEl) {
-        sizeEl.addEventListener("input", () => {
-          c.size = Number(sizeEl.value);
-          this._dispatch();
-        });
-      }
-
-      const ringEl = this.querySelector('[data-field="ring_width"]');
-      if (ringEl) {
-        ringEl.addEventListener("input", () => {
-          c.ring_width = Number(ringEl.value);
-          this._dispatch();
-        });
-      }
-
-      const colorEl = this.querySelector('[data-field="color"]');
-      if (colorEl) {
-        colorEl.addEventListener("input", () => {
-          c.color = colorEl.value;
-          this._dispatch();
-        });
-      }
-
-      const autoEl = this.querySelector('[data-field="autostart"]');
-      if (autoEl) {
-        autoEl.addEventListener("change", () => {
-          c.autostart = autoEl.checked;
-          this._dispatch();
-        });
-      }
-
-      const actionsEl = this.querySelector('[data-field="actions_raw"]');
-      if (actionsEl) {
-        actionsEl.addEventListener("input", () => {
-          const raw = actionsEl.value.trim();
-          if (!raw) {
-            delete c.actions;
-            delete c.action;
-          } else {
-            try {
-              const parsed = JSON.parse(raw);
-              c.actions = Array.isArray(parsed) ? parsed : [parsed];
-            } catch (err) {
-              return; // 不合法时保持原值,不派发
-            }
-          }
-          this._dispatch();
-        });
-      }
-
-      // 预设列表事件(事件委托,preset-list 会被重建)
-      const list = this.querySelector(".preset-list");
-      const bindPresetInputs = () => {
-        const presets = Array.isArray(c.presets) ? c.presets : [];
-        this.querySelectorAll(".preset-row").forEach((row) => {
-          const index = Number(row.getAttribute("data-index"));
-          const labelEl = row.querySelector("[data-preset-label]");
-          const minEl = row.querySelector("[data-preset-minutes]");
-          const removeEl = row.querySelector("[data-remove-preset]");
-          if (labelEl) {
-            labelEl.addEventListener("input", () => {
-              presets[index].label = labelEl.value;
-              this._dispatch();
-            });
-          }
-          if (minEl) {
-            minEl.addEventListener("input", () => {
-              presets[index].minutes = Number(minEl.value);
-              delete presets[index].seconds;
-              this._dispatch();
-            });
-          }
-          if (removeEl) {
-            removeEl.addEventListener("click", () => {
-              presets.splice(index, 1);
-              this._renderPresets(c, presets);
-            });
-          }
-        });
-      };
-      bindPresetInputs();
-
-      const addEl = this.querySelector("[data-add-preset]");
-      if (addEl) {
-        addEl.addEventListener("click", () => {
-          const presets = Array.isArray(c.presets) ? c.presets : [];
-          presets.push({ label: "新预设", minutes: 10 });
-          this._renderPresets(c, presets);
-        });
-      }
-    }
-
-    _renderPresets(c, presets) {
-      c.presets = presets;
-      const list = this.querySelector(".preset-list");
-      if (!list) return;
-      list.innerHTML = presets
-        .map(
-          (p, i) => `
-            <div class="preset-row" data-index="${i}">
-              <mwc-textfield data-preset-label label="名称" .value="${this._escape(p.label || "")}"></mwc-textfield>
-              <mwc-textfield class="min-input" data-preset-minutes type="number" min="1" label="分钟" .value="${this._escape(String(p.minutes != null ? p.minutes : Math.round((p.seconds || 0) / 60)))}"></mwc-textfield>
-              <mwc-button data-remove-preset class="remove-btn" label="移除"></mwc-button>
-            </div>`
-        )
-        .join("");
-      this._dispatch();
-      // 重新绑定预设输入事件
-      this.querySelectorAll(".preset-row").forEach((row) => {
-        const index = Number(row.getAttribute("data-index"));
-        const labelEl = row.querySelector("[data-preset-label]");
-        const minEl = row.querySelector("[data-preset-minutes]");
-        const removeEl = row.querySelector("[data-remove-preset]");
-        if (labelEl) {
-          labelEl.addEventListener("input", () => {
-            presets[index].label = labelEl.value;
-            this._dispatch();
-          });
-        }
-        if (minEl) {
-          minEl.addEventListener("input", () => {
-            presets[index].minutes = Number(minEl.value);
-            delete presets[index].seconds;
-            this._dispatch();
-          });
-        }
-        if (removeEl) {
-          removeEl.addEventListener("click", () => {
-            presets.splice(index, 1);
-            this._renderPresets(c, presets);
-          });
-        }
-      });
-    }
-
-    _escape(str) {
-      return String(str == null ? "" : str)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-    }
-  }
-
-  customElements.define("timer-se-card-editor", TimerSeCardEditor);
 
   customElements.define("timer-se-card", TimerSeCard);
 

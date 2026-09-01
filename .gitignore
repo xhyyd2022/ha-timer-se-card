@@ -8,3 +8,4 @@ node_modules/
 # 参考项目(手动拉取,不提交)
 reference/*
 !reference/README.md
+reference/
