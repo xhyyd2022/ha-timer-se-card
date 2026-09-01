@@ -466,8 +466,8 @@ export class TimerSeCard extends LitElement {
 
   getGridOptions() {
     return {
-      rows: 6,
-      columns: 6,
+      columns: 12,
+      rows: 4,
     };
   }
 
