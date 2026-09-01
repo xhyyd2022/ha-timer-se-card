@@ -838,7 +838,6 @@ export class TimerSeCard extends LitElement {
     }
 
     const config = this._config;
-    const valid = this._valid;
     const entity = this._entityState();
     const entityName = entity
       ? (entity.attributes.friendly_name as string) || config.entity
@@ -897,10 +896,6 @@ export class TimerSeCard extends LitElement {
             : ""}
           <span class="tse-status">${this._statusText()}</span>
         </div>
-
-        ${!valid
-          ? html`<div class="tse-warn">未配置触发实体/事件,倒计时结束将不执行任何动作</div>`
-          : ""}
 
         ${showCountdown
           ? html`<div class="tse-countdown ${isActive ? "is-active" : ""}">
