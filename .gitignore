@@ -3,6 +3,8 @@ node_modules/
 .DS_Store
 .vscode/
 
+.gitignore
+
 # 参考项目(手动拉取,不提交)
 reference/*
 !reference/README.md
