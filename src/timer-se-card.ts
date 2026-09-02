@@ -177,11 +177,15 @@ export class TimerSeCard extends LitElement {
   @state() private _config: TimerSeCardConfig = {};
   @state() private _sliderValue = 0;
   @state() private _timeRemaining: string | null = null;
-  @state() private _state: "idle" | "running" | "paused" | "finished" = "idle";
+  @state() private _state: "idle" | "running" | "paused" | "finished" | "cancelled" = "idle";
   @state() private _totalSeconds = 0;
 
   private _remainingSeconds = 0;
   private _endAt = 0;
+  // 倒计时启动时刻(毫秒),用于判断"定时期间设备是否被外部操作过":
+  // 实体 last_changed 落在 startedAt 之后 → 设备在倒计时窗口内被操作 → 取消
+  private _startedAt: number | null = null;
+  private _lastEntityState: string | null = null;
   private _firedAt: number | null = null;
   private _pendingFire = false; // hass 未就绪时待补触发的动作
   private _pendingFireHandled = false; // 补触发是否已处理(仅允许一次,之后拦截)
@@ -241,9 +245,9 @@ export class TimerSeCard extends LitElement {
           selector: {
             select: {
               options: [
-                { value: "countdown", label: "仅倒计时" },
-                { value: "progress", label: "仅方形进度块" },
-                { value: "both", label: "倒计时 + 方形进度块" },
+                { value: "countdown", label: "倒计时" },
+                { value: "progress", label: "进度块" },
+                { value: "both", label: "倒计时 + 进度块" },
               ],
               mode: "dropdown",
             },
@@ -321,9 +325,9 @@ export class TimerSeCard extends LitElement {
           case "card_title":
             return "卡片标题";
           case "entity":
-            return "倒计时结束后触发的实体";
+            return "触发实体";
           case "action":
-            return "倒计时结束后的动作";
+            return "结束动作";
           case "countdown_display":
             return "时间显示方式";
           case "slider_max":
@@ -335,15 +339,15 @@ export class TimerSeCard extends LitElement {
           case "hide_slider":
             return "隐藏滑块";
           case "autostart":
-            return "点击预设后立即开始";
+            return "自动开始";
           case "color":
-            return "主题色(如 #ff8f00)";
+            return "主题色";
           case "event_type":
-            return "结束事件类型(可选)";
+            return "结束事件类型";
           case "event_data":
-            return "结束事件数据(可选)";
+            return "结束事件数据";
           case "actions":
-            return "自定义结束动作";
+            return "自定义动作";
           default:
             return undefined;
         }
@@ -351,27 +355,17 @@ export class TimerSeCard extends LitElement {
       computeHelper: (schema: any) => {
         switch (schema.name) {
           case "entity":
-            return "时间到后自动触发该实体(任意类型,不限制设备)";
+            return "时间到后触发该实体";
           case "action":
-            return "倒计时结束后开启或关闭该实体;按钮/脚本/场景类实体仍按各自动作触发";
-          case "countdown_display":
-            return "选择倒计时数字、方形进度块或两者同时显示";
-          case "slider_max":
-            return "拖动滑块可在该范围内设置时间";
-          case "slider_unit":
-            return "滑块数值的单位(秒/分钟/小时)";
+            return "时间到后开启或关闭实体";
           case "presets":
-            return "在编辑器中用 chips 添加预设:纯数字为分钟,支持 30s、1h 等单位";
-          case "hide_slider":
-            return "隐藏滑块,只用预设按钮和输入框设置时间";
-          case "actions":
-            return "填写后优先于实体的自动动作,例如 service 填 button.press";
-          case "color":
-            return "留空则跟随 HA 主题";
+            return "纯数字为分钟,支持 30s、1h";
           case "event_type":
-            return "倒计时结束后向 HA 后端触发该事件(如 timer_finished),自动化可用 event trigger 监听";
-          case "event_data":
-            return "事件附带数据,例如 { \"timer_id\": \"123456\" }";
+            return "时间到后向 HA 触发此事件";
+          case "actions":
+            return "优先于实体动作";
+          case "color":
+            return "留空跟随主题";
           default:
             return undefined;
         }
@@ -468,6 +462,7 @@ export class TimerSeCard extends LitElement {
   protected updated(changedProperties: Map<string | number | symbol, unknown>): void {
     if (changedProperties.has("hass")) {
       this._applyTheme();
+      this._checkEntityStateChanged();
       // 补触发恢复时未执行的动作:
       // 1) 编辑器/预览模式下直接拦截,不执行任何动作
       // 2) 仅允许一次,之后(编辑器调整配置)的 hass 更新一律丢弃
@@ -503,6 +498,61 @@ export class TimerSeCard extends LitElement {
       return true;
     }
     return false;
+  }
+
+  /* ---------------- 设备状态绑定 ---------------- */
+
+  // 倒计时运行/暂停期间设备被外部操作(开↔关翻转)→ 自动取消倒计时。
+  // 瞬态(unavailable/unknown/none)不算操作,避免设备短暂掉线误杀定时。
+  private _checkEntityStateChanged(): void {
+    const entity = this._entityState();
+    if (!entity) return;
+    const state = entity.state;
+
+    // 恢复场景回溯:倒计时启动后设备才被操作(last_changed 晚于启动时刻)→ 取消
+    if (
+      this._state === "running" &&
+      this._startedAt !== null &&
+      typeof (entity as any).last_changed === "string"
+    ) {
+      const changedAt = new Date((entity as any).last_changed).getTime();
+      if (!isNaN(changedAt) && changedAt > this._startedAt) {
+        this._lastEntityState = state;
+        this._cancel();
+        return;
+      }
+    }
+
+    if (this._lastEntityState === null) {
+      // 首次看到实体状态,仅记录基线,不动作
+      this._lastEntityState = state;
+      return;
+    }
+    if (
+      state !== this._lastEntityState &&
+      state !== "unavailable" &&
+      state !== "unknown" &&
+      state !== "none" &&
+      this._lastEntityState !== "unavailable" &&
+      this._lastEntityState !== "unknown" &&
+      this._lastEntityState !== "none"
+    ) {
+      this._lastEntityState = state;
+      if (this._state === "running" || this._state === "paused") {
+        // 设备被手动操作(开→关或关→开),用户意图优先,取消定时
+        this._cancel();
+      }
+    } else {
+      this._lastEntityState = state;
+    }
+  }
+
+  private _cancel(): void {
+    this._stopCountdown();
+    this._state = "cancelled";
+    this._endAt = 0;
+    this._saveState();
+    this._updateRender();
   }
 
   connectedCallback(): void {
@@ -548,6 +598,11 @@ export class TimerSeCard extends LitElement {
         this._totalSeconds = typeof saved.total === "number" ? saved.total : this._remainingSeconds;
         this._endAt = saved.endAt;
         this._firedAt = saved.firedAt || null;
+        // 启动时刻:优先存储值,老数据用 endAt - total 推算
+        this._startedAt =
+          typeof saved.startedAt === "number"
+            ? saved.startedAt
+            : this._endAt - this._totalSeconds * 1000;
       } else {
         // 页面关闭期间倒计时已结束
         this._state = "finished";
@@ -576,6 +631,7 @@ export class TimerSeCard extends LitElement {
       remaining: Math.round(this._remainingSeconds),
       total: this._totalSeconds,
       endAt: this._endAt,
+      startedAt: this._startedAt,
       firedAt: this._firedAt,
       sliderValue: this._sliderValue,
     };
@@ -591,6 +647,7 @@ export class TimerSeCard extends LitElement {
     this._remainingSeconds = Math.max(0, seconds);
     this._totalSeconds = this._remainingSeconds;
     this._endAt = 0;
+    this._startedAt = null;
     this._state = "idle";
     this._firedAt = null;
     this._saveState();
@@ -605,6 +662,9 @@ export class TimerSeCard extends LitElement {
     if (this._remainingSeconds <= 0) return;
     this._state = "running";
     this._endAt = Date.now() + this._remainingSeconds * 1000;
+    if (this._startedAt === null) {
+      this._startedAt = Date.now();
+    }
     this._startCountdown();
     this._saveState();
   }
@@ -619,7 +679,13 @@ export class TimerSeCard extends LitElement {
   }
 
   private _resume(): void {
-    if (this._state !== "paused" || this._remainingSeconds <= 0) return;
+    if (
+      (this._state !== "paused" && this._state !== "cancelled") ||
+      this._remainingSeconds <= 0
+    ) {
+      return;
+    }
+    this._startedAt = null; // 重新开始,基准重置为当前时刻
     this._start();
   }
 
@@ -629,6 +695,7 @@ export class TimerSeCard extends LitElement {
     this._remainingSeconds = 0;
     this._totalSeconds = 0;
     this._endAt = 0;
+    this._startedAt = null;
     this._firedAt = null;
     this._saveState();
     this._updateRender();
@@ -640,6 +707,7 @@ export class TimerSeCard extends LitElement {
         this._pause();
         break;
       case "paused":
+      case "cancelled":
         this._resume();
         break;
       case "finished":
@@ -808,6 +876,36 @@ export class TimerSeCard extends LitElement {
     return entity.state === "on" || entity.state === "open";
   }
 
+  // 状态 chip 文本:覆盖常用 HA 实体状态,未知状态显示原文
+  private _entityStateText(): string {
+    const entity = this._entityState();
+    if (!entity) return "关";
+    switch (entity.state) {
+      case "on":
+      case "open":
+      case "opening":
+      case "home":
+      case "playing":
+      case "active":
+      case "heat":
+      case "cool":
+        return "开";
+      case "off":
+      case "closed":
+      case "closing":
+      case "away":
+      case "idle":
+      case "standby":
+        return "关";
+      case "unavailable":
+        return "不可用";
+      case "unknown":
+        return "未知";
+      default:
+        return entity.state;
+    }
+  }
+
   private _statusText(): string {
     switch (this._state) {
       case "running":
@@ -815,7 +913,9 @@ export class TimerSeCard extends LitElement {
       case "paused":
         return "已暂停";
       case "finished":
-        return "时间到!";
+        return "时间到";
+      case "cancelled":
+        return "已取消";
       default:
         return this._remainingSeconds > 0 ? formatTime(this._remainingSeconds) : "待机";
     }
@@ -927,7 +1027,7 @@ export class TimerSeCard extends LitElement {
         <div class="tse-header">
           <span class="tse-title">${headerTitle}</span>
           ${entity
-            ? html`<span class="tse-chip ${isOn ? "is-on" : "is-off"}" title="${config.entity}">${isOn ? "开" : "关"}</span>`
+            ? html`<span class="tse-chip ${isOn ? "is-on" : "is-off"} ${["unavailable", "unknown"].includes(entity.state) ? "is-na" : ""}" title="${config.entity}">${this._entityStateText()}</span>`
             : ""}
           <span class="tse-status">${this._statusText()}</span>
         </div>
@@ -1027,6 +1127,11 @@ export class TimerSeCard extends LitElement {
     }
     .tse-chip.is-off {
       background: var(--disabled-text-color, #9e9e9e);
+    }
+    .tse-chip.is-na {
+      background: var(--divider-color, #bdbdbd);
+      color: var(--primary-text-color, #1c1c1e);
+      font-style: italic;
     }
     .tse-status {
       margin-left: auto;

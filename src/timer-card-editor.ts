@@ -157,34 +157,30 @@ export class TimerCardEditor extends LitElement {
   private _computeLabel = (schema: any): string => {
     const labels: Record<string, string> = {
       card_title: "卡片标题",
-      entity: "倒计时结束后触发的实体",
-      action: "倒计时结束后的动作",
+      entity: "触发实体",
+      action: "结束动作",
       countdown_display: "时间显示方式",
       slider_max: "滑块最大值",
       slider_unit: "滑块单位",
       hide_slider: "隐藏滑块",
-      show_manual_input: "显示手动设置输入框",
-      autostart: "点击预设后立即开始",
-      color: "主题色(如 #ff8f00)",
-      event_type: "结束事件类型(可选)",
-      event_data: "结束事件数据(可选)",
-      actions: "自定义结束动作",
+      show_manual_input: "显示输入框",
+      autostart: "自动开始",
+      color: "主题色",
+      event_type: "结束事件类型",
+      event_data: "结束事件数据",
+      actions: "自定义动作",
     };
     return labels[schema.name] ?? "";
   };
 
   private _computeHelper = (schema: any): string => {
     const helpers: Record<string, string> = {
-      entity: "时间到后自动触发该实体(任意类型,不限制设备)",
-      action: "倒计时结束后开启或关闭该实体",
-      countdown_display: "选择倒计时数字、方形进度块或两者同时显示",
-      slider_max: "拖动滑块可在该范围内设置时间",
-      slider_unit: "滑块数值的单位(秒/分钟/小时/天)",
-      hide_slider: "隐藏滑块,只用预设按钮和输入框设置时间",
-      show_manual_input: "显示底部的输入框与设置/重置按钮(手动输入时间,默认关闭)",
-      event_type: "倒计时结束后向 HA 后端触发该事件(如 timer_finished),自动化可用 event trigger 监听",
-      event_data: "事件附带数据,例如 { \"timer_id\": \"123456\" }",
-      color: "留空则跟随 HA 主题",
+      entity: "时间到后触发该实体",
+      action: "时间到后开启或关闭实体",
+      presets: "纯数字为分钟,支持 30s、1h",
+      event_type: "时间到后向 HA 触发此事件",
+      actions: "优先于实体动作",
+      color: "留空跟随主题",
     };
     return helpers[schema.name] ?? "";
   };
@@ -211,9 +207,9 @@ export class TimerCardEditor extends LitElement {
           select: {
             mode: "dropdown",
             options: [
-              { value: "countdown", label: "仅倒计时" },
-              { value: "progress", label: "仅方形进度块" },
-              { value: "both", label: "倒计时 + 方形进度块" },
+              { value: "countdown", label: "倒计时" },
+              { value: "progress", label: "进度块" },
+              { value: "both", label: "倒计时 + 进度块" },
             ],
           },
         },
@@ -275,7 +271,7 @@ export class TimerCardEditor extends LitElement {
     if (!val) return;
     const validated = validateTimerButton(val);
     if (validated === null) {
-      alert("无效的预设时间格式。示例:30s、10、1.5h(纯数字为分钟)");
+      alert("无效格式,示例:30s、10、1.5h(纯数字为分钟)");
       return;
     }
     const current = Array.isArray(this._config.timer_buttons)
@@ -331,7 +327,7 @@ export class TimerCardEditor extends LitElement {
         ></ha-form>
 
         <div class="config-row">
-          <div class="config-label">预设时间(Timer Presets)</div>
+          <div class="config-label">预设时间</div>
           <div class="chips-wrapper">
             ${buttons.map(
               (btn) => html`
@@ -346,7 +342,7 @@ export class TimerCardEditor extends LitElement {
             <input
               class="ht-field"
               type="text"
-              placeholder="添加预设(如 30s、10、1h)"
+              placeholder="如 30s、10、1h"
               .value=${this._newTimerButtonValue}
               @input=${this._handleNewTimerInput}
               @keypress=${(e: KeyboardEvent) => { if (e.key === "Enter") this._addTimerButton(); }}
@@ -354,9 +350,9 @@ export class TimerCardEditor extends LitElement {
             />
             <div class="add-btn" @click=${this._addTimerButton} role="button">添加</div>
           </div>
-          <div class="helper-text">支持秒(s)、分钟(m)、小时(h)。示例:30s、10、1.5h。</div>
+          <div class="helper-text">纯数字为分钟,支持 30s、1.5h</div>
           ${!buttons.length && cfg.hide_slider
-            ? html`<div class="info-text">ℹ️ 没有预设且滑块已隐藏,卡片将无法设置时长。</div>`
+            ? html`<div class="info-text">无预设且滑块已隐藏,将无法设置时长</div>`
             : ""}
         </div>
 
