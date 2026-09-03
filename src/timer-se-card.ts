@@ -187,8 +187,6 @@ export class TimerSeCard extends LitElement {
   private _startedAt: number | null = null;
   private _lastEntityState: string | null = null;
   private _firedAt: number | null = null;
-  private _pendingFire = false; // hass 未就绪时待补触发的动作
-  private _pendingFireHandled = false; // 补触发是否已处理(仅允许一次,之后拦截)
   private _restored = false; // 是否已从 localStorage 恢复过状态(仅首次 setConfig)
   private _countdownInterval: ReturnType<typeof setInterval> | null = null;
   private _storageKey = "timer-se-card:default";
@@ -419,23 +417,16 @@ export class TimerSeCard extends LitElement {
     this._storageKey = "timer-se-card:" + (merged.entity || "default");
 
     // 恢复逻辑只在首次 setConfig 时执行;编辑器调整配置会多次调用 setConfig,
-    // 重复恢复会干扰运行中的倒计时,并可能重复补触发动作
+    // 重复恢复会干扰运行中的倒计时
     if (!this._restored) {
       this._restored = true;
       this._restoreState();
       // 恢复运行中的倒计时后启动计时器(connectedCallback 早于 setConfig,不会启动)
       if (this._state === "running") {
         this._startCountdown();
-      } else if (this._state === "finished" && !this._firedAt) {
-        // 页面关闭期间倒计时已结束且动作未触发,补触发一次(hass 未就绪则待 hass 到达)
-        this._firedAt = Date.now();
-        if (this._hass) {
-          this._fireActions();
-        } else {
-          this._pendingFire = true;
-        }
-        this._saveState();
       }
+      // 过期/待机的旧记录直接覆盖为当前状态,避免下次仍按 running 恢复
+      this._saveState();
     }
     this.requestUpdate();
   }
@@ -463,41 +454,7 @@ export class TimerSeCard extends LitElement {
     if (changedProperties.has("hass")) {
       this._applyTheme();
       this._checkEntityStateChanged();
-      // 补触发恢复时未执行的动作:
-      // 1) 编辑器/预览模式下直接拦截,不执行任何动作
-      // 2) 仅允许一次,之后(编辑器调整配置)的 hass 更新一律丢弃
-      if (this._pendingFire && this.hass && !this._pendingFireHandled) {
-        if (this._isEditorContext()) {
-          this._pendingFire = false; // 编辑器里不执行,直接丢弃
-          return;
-        }
-        this._pendingFireHandled = true;
-        this._pendingFire = false;
-        this._fireActions();
-      } else if (this._pendingFire) {
-        this._pendingFire = false; // 丢弃,不再补触发
-      }
     }
-  }
-
-  // 检测是否处于 HA 编辑器/预览上下文(此时不应执行任何动作)
-  private _isEditorContext(): boolean {
-    let el: HTMLElement | null = this;
-    while (el) {
-      const tag = el.tagName ? el.tagName.toLowerCase() : "";
-      if (tag === "hui-card-edit-mode" || tag === "hui-card-preview") {
-        return true;
-      }
-      if (tag === "hui-section" && el.hasAttribute("preview")) {
-        return true;
-      }
-      el = el.parentElement;
-    }
-    // 编辑器里卡片可能不在 preview 容器内,再检查 body 上是否有编辑标识
-    if (document.body && document.body.querySelector("hui-card-edit-mode")) {
-      return true;
-    }
-    return false;
   }
 
   /* ---------------- 设备状态绑定 ---------------- */
@@ -604,20 +561,32 @@ export class TimerSeCard extends LitElement {
             ? saved.startedAt
             : this._endAt - this._totalSeconds * 1000;
       } else {
-        // 页面关闭期间倒计时已结束
-        this._state = "finished";
+        // 页面/视图关闭期间倒计时已过期:从未"真正走到零",
+        // 不补触发任何动作(避免在你手动操作过设备后又被自动关闭),直接回待机
+        this._state = "idle";
         this._remainingSeconds = 0;
-        this._totalSeconds = typeof saved.total === "number" ? saved.total : 0;
-        this._firedAt = saved.firedAt || null;
+        this._totalSeconds = 0;
+        this._endAt = 0;
+        this._startedAt = null;
+        this._firedAt = null;
       }
     } else if (saved.state === "paused") {
       this._state = "paused";
       this._remainingSeconds = typeof saved.remaining === "number" ? saved.remaining : 0;
       this._totalSeconds = typeof saved.total === "number" ? saved.total : this._remainingSeconds;
     } else if (saved.state === "idle" || saved.state === "finished") {
-      this._state = saved.state;
-      this._remainingSeconds = typeof saved.remaining === "number" ? saved.remaining : 0;
-      this._totalSeconds = typeof saved.total === "number" ? saved.total : this._remainingSeconds;
+      if (saved.state === "finished" && typeof saved.firedAt !== "number") {
+        // 历史遗留:标记结束但从没触发过动作 → 待机,不补触发
+        this._state = "idle";
+        this._remainingSeconds = 0;
+        this._totalSeconds = 0;
+        this._firedAt = null;
+      } else {
+        // finished 且已触发过动作(firedAt)时保留"时间到"展示,不重复触发
+        this._state = saved.state;
+        this._remainingSeconds = typeof saved.remaining === "number" ? saved.remaining : 0;
+        this._totalSeconds = typeof saved.total === "number" ? saved.total : this._remainingSeconds;
+      }
     }
     if (typeof saved.sliderValue === "number") {
       const maxValue = (this._config.slider_max as number) || DEFAULT_MAX_MINUTES;
