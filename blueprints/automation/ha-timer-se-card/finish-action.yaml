@@ -3,10 +3,9 @@ blueprint:
   description: |
     配合 Timer SE Card 的 HA 服务端计时模式(timer_entity)使用。
 
-    只需设置两项输入:倒计时用的 Timer 辅助实体、以及到点要操作的实体。
-    倒计时时长、开始/暂停/继续/取消仍由前端卡片每次动态控制;
-    卡片每次开始时会自动 trigger/start 所选 Timer,本自动化在到点(timer.finished)后执行动作。
-    页面/浏览器关闭时也能准确到点执行。
+    蓝图、卡片与自动化共用**同一个 Timer 辅助实体**:卡片把时间参数传给
+    timer.start 开始服务端倒计时;到点(timer.finished)后本自动化执行结束动作。
+    页面/浏览器关闭时同样准确到点。
   domain: automation
   source_url: >-
     https://github.com/xhyyd2022/ha-timer-se-card/blob/main/blueprints/automation/ha-timer-se-card/finish-action.yaml
@@ -14,16 +13,31 @@ blueprint:
     timer_entity:
       name: 倒计时 Timer 实体
       description: >-
-        卡片配置里 timer_entity 填写的那个 Timer 辅助实体
+        辅助实体里的 Timer,与卡片配置 timer_entity 一致
         (HA:设置 → 设备与服务 → 辅助元素 → 计时器)
       selector:
         entity:
           domain: timer
     target_entity:
       name: 结束动作目标实体
-      description: 倒计时到点后要操作的实体,例如灯光/开关
+      description: >-
+        到点要操作的真实设备实体(灯/开关/风扇等,已按类型筛选);
+        若要操作输入类辅助实体或未列出的域,可改在"其他实体"中手动填写
       selector:
-        entity: {}
+        entity:
+          domain:
+            - light
+            - switch
+            - fan
+            - cover
+            - climate
+            - media_player
+            - humidifier
+            - water_heater
+            - vacuum
+            - lock
+            - siren
+            - valve
     end_action:
       name: 结束动作
       description: 到点后对目标实体做什么(默认关闭)
@@ -61,9 +75,8 @@ actions:
           - action: homeassistant.toggle
             target:
               entity_id: !input target_entity
-      # 默认:关闭
-      - default:
-          - action: homeassistant.turn_off
-            target:
-              entity_id: !input target_entity
+    default:
+      - action: homeassistant.turn_off
+        target:
+          entity_id: !input target_entity
 mode: single
