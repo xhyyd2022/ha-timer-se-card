@@ -65,6 +65,12 @@ HA → 设置 → 设备与服务 → 辅助元素 → **创建辅助元素 → 
 https://raw.githubusercontent.com/xhyyd2022/ha-timer-se-card/main/blueprints/automation/ha-timer-se-card/finish-action.yaml
 ```
 
+> **备用加速地址**(当上方地址无法访问时使用,两处导入内容相同):
+>
+> ```
+> https://gh.jasonzeng.dev/https://raw.githubusercontent.com/xhyyd2022/ha-timer-se-card/main/blueprints/automation/ha-timer-se-card/finish-action.yaml
+> ```
+
 ### 第 2 步:创建自动化
 
 1. 点击 **「创建自动化」**,选择刚导入的 **Timer SE Card:倒计时结束动作**;
