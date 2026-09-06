@@ -19,14 +19,27 @@ jobs:
         with:
           node-version: 20
 
+      - name: Resolve version from tag
+        id: ver
+        run: echo "num=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Install dependencies
         run: npm ci || npm install
 
+      # 版本号以 git tag 为准,注入 __VERSION__ 后编译进 dist 产物
       - name: Build
         run: npm run build
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.num }}
+
+      # HACS/手动引用都用固定文件名 ha-timer-se-card.js;另留一份带版本号便于核对
+      - name: Stage assets
+        run: cp dist/ha-timer-se-card.js "dist/ha-timer-se-card-${{ steps.ver.outputs.num }}.js"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ha-timer-se-card.js
+          files: |
+            dist/ha-timer-se-card.js
+            dist/ha-timer-se-card-${{ steps.ver.outputs.num }}.js
           generate_release_notes: true

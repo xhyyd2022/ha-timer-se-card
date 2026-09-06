@@ -38,7 +38,8 @@ interface HomeAssistant {
   };
 }
 
-const CARD_VERSION = "1.5.0";
+// 版本号在构建时注入(rollup 读取 package.json / RELEASE_VERSION),源码内仅留占位符
+const CARD_VERSION = "__VERSION__";
 const TOTAL_BLOCKS = 16; // 进度块条分段数
 const DEFAULT_MAX_MINUTES = 120; // 与上游一致
 const DEFAULT_PRESETS = [15, 30, 60]; // 默认预设(3 个时间,参考上游)
@@ -55,6 +56,7 @@ interface TimerSeCardConfig {
   action?: string; // "on" | "off" | 自定义 service 对象
   actions?: Array<{ service: string; target?: Record<string, unknown>; data?: Record<string, unknown> }>;
   card_title?: string; // 卡片标题(与上游一致)
+  timer_entity?: string; // 可选:HA Timer helper 实体(timer.xxx);配置后倒计时由 HA 服务端执行
   presets?: (number | string | { minutes?: number; seconds?: number; label?: string })[];
   slider_max?: number; // 滑块最大值(上游默认 120)
   slider_unit?: string; // "min" | "sec" | "hr"(上游默认 min)
@@ -118,6 +120,22 @@ function parseDuration(str: string): number | null {
     }
   }
   return Math.max(0, Math.round(total));
+}
+
+// HA timer 实体属性辅助(timer 实体格式:duration/remaining 为 "H:MM:SS",运行中结束时刻为 finishes_at)
+// 解析 "HH:MM:SS" / "H:MM:SS" → 秒
+function parseClockSeconds(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const m = value.trim().match(/^(\d+):([0-5]?\d):([0-5]?\d)$/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseInt(m[3], 10);
+}
+
+// ISO 时间戳(HA 属性 finishes_at/ends_at)→ epoch 毫秒;解析失败返回 null
+function parseIsoToMs(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const t = Date.parse(value);
+  return isNaN(t) ? null : t;
 }
 
 type PresetInput = number | string | { minutes?: number; seconds?: number; label?: string };
@@ -192,6 +210,12 @@ export class TimerSeCard extends LitElement {
   private _storageKey = "timer-se-card:default";
   private _valid = false;
   private _presets: TimerButton[] = [];
+
+  // ---- HA 服务端倒计时模式(timer_entity)----
+  // 配置 timer_entity 后,计时以 HA timer 实体为准(页面关闭也能到点),卡片只做镜像与服务调用。
+  private _timerEntity: string | null = null;
+  // 我们最近一次发出的服务调用期望的服务端状态(active/paused/idle),用于抑制竞态误判
+  private _timerOp: { expect: string; at: number } | null = null;
 
   static get version() {
     return CARD_VERSION;
@@ -302,6 +326,12 @@ export class TimerSeCard extends LitElement {
               },
             },
             {
+              name: "timer_entity",
+              selector: {
+                entity: { domain: ["timer"] },
+              },
+            },
+            {
               name: "actions",
               selector: {
                 object: {
@@ -346,6 +376,8 @@ export class TimerSeCard extends LitElement {
             return "结束事件数据";
           case "actions":
             return "自定义动作";
+          case "timer_entity":
+            return "服务端倒计时实体";
           default:
             return undefined;
         }
@@ -362,6 +394,8 @@ export class TimerSeCard extends LitElement {
             return "时间到后向 HA 触发此事件";
           case "actions":
             return "优先于实体动作";
+          case "timer_entity":
+            return "计时改由 HA 执行,页面关闭也能到点(详见 README)";
           case "color":
             return "留空跟随主题";
           default:
@@ -408,13 +442,17 @@ export class TimerSeCard extends LitElement {
       .filter((b): b is TimerButton => b !== null);
 
     this._config = merged;
+    // timer_entity:可选 HA Timer helper;仅接受 timer.*
+    const te = typeof merged.timer_entity === "string" ? merged.timer_entity.trim() : "";
+    this._timerEntity = te.startsWith("timer.") ? te : null;
     this._valid = !!(
       merged.entity ||
       (Array.isArray(merged.actions) && merged.actions.length) ||
       (merged.action && typeof merged.action === "object" && (merged.action as any).service) ||
-      (typeof merged.event_type === "string" && merged.event_type.length > 0)
+      (typeof merged.event_type === "string" && merged.event_type.length > 0) ||
+      !!this._timerEntity
     );
-    this._storageKey = "timer-se-card:" + (merged.entity || "default");
+    this._storageKey = "timer-se-card:" + (merged.entity || this._timerEntity || "default");
 
     // 恢复逻辑只在首次 setConfig 时执行;编辑器调整配置会多次调用 setConfig,
     // 重复恢复会干扰运行中的倒计时
@@ -455,6 +493,8 @@ export class TimerSeCard extends LitElement {
       this._applyTheme();
       this._checkEntityStateChanged();
     }
+    // 服务端倒计时模式:每次状态刷新都核对一次绑定的 timer 实体(只读该实体)
+    this._syncServerTimer();
   }
 
   /* ---------------- 设备状态绑定 ---------------- */
@@ -505,6 +545,10 @@ export class TimerSeCard extends LitElement {
   }
 
   private _cancel(): void {
+    // 服务端模式:同时取消 HA timer,避免 automation 到点仍执行
+    if (this._timerEntity && (this._state === "running" || this._state === "paused")) {
+      this._callTimerService("cancel", "idle");
+    }
     this._stopCountdown();
     this._state = "cancelled";
     this._endAt = 0;
@@ -537,7 +581,11 @@ export class TimerSeCard extends LitElement {
 
   /* ---------------- state ---------------- */
 
+  // 纯前端模式才用 localStorage 恢复/保存(localStorage 只在前端计时,关闭期间会过期)。
+  // 服务端模式(timer_entity)下状态以 HA timer 实体为准:不读也不写本地记录,
+  // 由 _syncServerTimer() 从实体状态恢复(active→running / paused→paused),避免历史遗留冲突。
   private _restoreState(): void {
+    if (this._timerEntity) return;
     let saved: any = null;
     try {
       const raw = localStorage.getItem(this._storageKey);
@@ -595,6 +643,8 @@ export class TimerSeCard extends LitElement {
   }
 
   private _saveState(): void {
+    // 服务端模式:状态由 HA timer 实体驱动,无需写 localStorage(也不留过期残留)
+    if (this._timerEntity) return;
     const data = {
       state: this._state,
       remaining: Math.round(this._remainingSeconds),
@@ -612,6 +662,7 @@ export class TimerSeCard extends LitElement {
   }
 
   private _setTime(seconds: number): void {
+    const wasActive = this._state === "running" || this._state === "paused";
     this._stopCountdown();
     this._remainingSeconds = Math.max(0, seconds);
     this._totalSeconds = this._remainingSeconds;
@@ -619,6 +670,10 @@ export class TimerSeCard extends LitElement {
     this._startedAt = null;
     this._state = "idle";
     this._firedAt = null;
+    // 服务端模式:改时间但未自动开始时,若 HA timer 还在跑旧会话,需先取消,避免显示与服务端不一致
+    if (this._timerEntity && wasActive && !this._config.autostart) {
+      this._callTimerService("cancel", "idle");
+    }
     this._saveState();
     if (this._config.autostart && this._remainingSeconds > 0) {
       this._start();
@@ -634,12 +689,21 @@ export class TimerSeCard extends LitElement {
     if (this._startedAt === null) {
       this._startedAt = Date.now();
     }
+    // 服务端模式:以任意时长动态启动 HA timer(此调用同时兼容"从暂停恢复"与"重新计时")
+    if (this._timerEntity) {
+      this._callTimerService("start", "active", {
+        duration: Math.max(1, Math.ceil(this._remainingSeconds)),
+      });
+    }
     this._startCountdown();
     this._saveState();
   }
 
   private _pause(): void {
     if (this._state !== "running") return;
+    if (this._timerEntity) {
+      this._callTimerService("pause", "paused");
+    }
     this._stopCountdown();
     this._state = "paused";
     this._endAt = 0;
@@ -659,6 +723,13 @@ export class TimerSeCard extends LitElement {
   }
 
   private _reset(): void {
+    // 服务端模式:运行/暂停中重置 → 取消 HA timer
+    if (
+      this._timerEntity &&
+      (this._state === "running" || this._state === "paused")
+    ) {
+      this._callTimerService("cancel", "idle");
+    }
     this._stopCountdown();
     this._state = "idle";
     this._remainingSeconds = 0;
@@ -691,6 +762,15 @@ export class TimerSeCard extends LitElement {
   private _tick(): void {
     this._remainingSeconds = Math.max(0, (this._endAt - Date.now()) / 1000);
     if (this._remainingSeconds <= 0) {
+      if (this._timerEntity && this._timerServerOk) {
+        // 服务端模式:以 HA timer 为准。若服务端仍在 active(时钟偏差/被外部重设),
+        // 等下一次 tick;HA 端到点后状态会推到 idle,再由 reconcile 收尾。
+        const s = this._timerState;
+        if (s && s.state === "active") return;
+        this._finishFromServer();
+        return;
+      }
+      // 未配置服务端实体 / 实体缺失 → 沿用纯前端逻辑(真正归零触发一次)
       this._finish();
       return;
     }
@@ -722,6 +802,163 @@ export class TimerSeCard extends LitElement {
       clearInterval(this._countdownInterval);
       this._countdownInterval = null;
     }
+  }
+
+  /* ---------------- HA timer 服务端模式(只跟随配置的 timer_entity) ---------------- */
+
+  private get _timerState(): HAState | null {
+    if (!this._timerEntity || !this.hass || !this.hass.states) return null;
+    return this.hass.states[this._timerEntity] || null;
+  }
+
+  // 服务端实体可用:已配置且在 hass.states 中存在。缺失则退回纯前端,到点照常触发卡片动作。
+  private get _timerServerOk(): boolean {
+    return this._timerEntity !== null && !!this._timerState;
+  }
+
+  private _callTimerService(service: string, expect: string, data?: Record<string, unknown>): void {
+    if (!this._timerEntity || !this.hass || typeof this.hass.callService !== "function") return;
+    this._timerOp = { expect, at: Date.now() };
+    try {
+      const p = this.hass.callService("timer", service, data || {}, { entity_id: this._timerEntity });
+      if (p && typeof p.catch === "function") {
+        p.catch((e: unknown) =>
+          console.warn("timer-se-card: timer." + service + " 调用失败", e)
+        );
+      }
+    } catch (e) {
+      console.warn("timer-se-card: timer." + service + " 调用失败", e);
+    }
+  }
+
+  // 核对并跟随绑定的 timer 实体(每次 hass 刷新调用一次,只读该实体):
+  //  - active → 以 finishes_at/ends_at 校准本地 endAt;本地非 running → 采用为 running(多端同步)
+  //  - paused → 本地非 paused → 采用 paused
+  //  - idle 且本地 running/paused → 依 last_transition 判断:自然结束(finished)或外部取消(cancelled)
+  // 竞态抑制:自己刚发起的调用(<1.6s)不反向推翻本地;服务端达到期望态且过 0.4s 才清除 pending。
+  private _syncServerTimer(): void {
+    if (!this._timerEntity) return;
+    const s = this._timerState;
+    if (!s || typeof s.state !== "string") return;
+    const server = s.state;
+    if (server === "unavailable" || server === "unknown") return;
+    const attrs = (s.attributes || {}) as { [k: string]: any };
+    const lastTrans = typeof attrs.last_transition === "string" ? attrs.last_transition : "";
+    const now = Date.now();
+    const op = this._timerOp;
+    const opActive = !!op && now - op.at < 1600;
+    const opSettled = !!op && now - op.at >= 400;
+
+    const align = (): void => {
+      const endMs = parseIsoToMs(attrs.finishes_at) ?? parseIsoToMs(attrs.ends_at);
+      if (!endMs) return;
+      if (Math.abs(this._endAt - endMs) < 60) return;
+      this._endAt = endMs;
+      this._remainingSeconds = Math.max(0, (endMs - now) / 1000);
+      const dur = parseClockSeconds(attrs.duration);
+      if (dur) this._totalSeconds = dur;
+    };
+
+    if (server === "active") {
+      if (opActive) {
+        if (op!.expect === "active" && opSettled) this._timerOp = null;
+        else return; // 自己发起的 start 尚未落定,等下一次刷新
+      }
+      if (this._state === "running") {
+        align();
+        return;
+      }
+      this._adoptServerTimer("active", s);
+      return;
+    }
+
+    if (server === "paused") {
+      if (opActive) {
+        if (op!.expect === "paused" && opSettled) this._timerOp = null;
+        else return;
+      }
+      if (this._state === "paused") return;
+      this._adoptServerTimer("paused", s);
+      return;
+    }
+
+    // server === "idle"
+    if (opActive) {
+      if (op!.expect === "idle" && opSettled) this._timerOp = null;
+      else return;
+    }
+    if (this._state === "running") {
+      if (lastTrans === "finished" || (this._endAt > 0 && this._endAt <= now)) {
+        this._finishFromServer();
+      } else {
+        this._cancelFromServer();
+      }
+    } else if (this._state === "paused") {
+      this._cancelFromServer();
+    }
+  }
+
+  // 采用服务端状态(页面/多端重开,或外部对 timer 发起了 start/pause)
+  private _adoptServerTimer(kind: "active" | "paused", s: HAState): void {
+    const attrs = (s.attributes || {}) as { [k: string]: any };
+    this._stopCountdown();
+    if (kind === "active") {
+      const endMs = parseIsoToMs(attrs.finishes_at) ?? parseIsoToMs(attrs.ends_at);
+      if (!endMs) return;
+      const rem = Math.max(0, (endMs - Date.now()) / 1000);
+      const dur = parseClockSeconds(attrs.duration);
+      this._state = "running";
+      this._endAt = endMs;
+      this._remainingSeconds = rem;
+      this._totalSeconds = dur && dur > 0 ? dur : rem;
+      this._firedAt = null;
+      // 由服务端 end 时刻推算本次启动时刻,用于识别"页面关闭期间设备被手动操作"
+      this._startedAt = dur && dur > 0 ? endMs - dur * 1000 : Date.now();
+      this._lastEntityState = null;
+      this._saveState();
+      this._startCountdown();
+      // 页面重开时补一次检测:若倒计时期间设备被操作过(开↔关),直接取消,不等下次变更
+      this._checkEntityStateChanged();
+    } else {
+      const rem = parseClockSeconds(attrs.remaining);
+      const dur = parseClockSeconds(attrs.duration);
+      this._state = "paused";
+      this._endAt = 0;
+      this._remainingSeconds = rem != null ? rem : this._remainingSeconds;
+      if (dur) this._totalSeconds = dur;
+      this._firedAt = null;
+      this._saveState();
+      this._updateRender();
+    }
+  }
+
+  // HA 端已自然到点(服务端 idle + last_transition=finished):结束动作由 HA automation 执行,
+  // 卡片只更新显示、派发 DOM 事件,不重复调用实体动作。
+  private _finishFromServer(): void {
+    this._stopCountdown();
+    this._state = "finished";
+    this._remainingSeconds = 0;
+    this._totalSeconds = 0;
+    this._endAt = 0;
+    if (!this._firedAt) this._firedAt = Date.now();
+    this._saveState();
+    this._updateRender();
+    this.dispatchEvent(
+      new CustomEvent("timer-se-card-finished", {
+        detail: { config: this._config, source: "timer.finished" },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  // 服务端被外部取消(cancel / 卡片检测到设备被手动操作):本地跟随,不执行任何动作
+  private _cancelFromServer(): void {
+    this._stopCountdown();
+    this._state = "cancelled";
+    this._endAt = 0;
+    this._saveState();
+    this._updateRender();
   }
 
   /* ---------------- input ---------------- */
@@ -987,6 +1224,13 @@ export class TimerSeCard extends LitElement {
     const showManualInput = config.show_manual_input === true;
     const showReset = this._state !== "idle" || this._totalSeconds > 0;
 
+    // 服务端倒计时模式:配置了 timer_entity 但 HA 里找不到该实体 → 提示用户创建/检查
+    const timerEntityMissing =
+      !!this._timerEntity &&
+      !!this.hass &&
+      !!this.hass.states &&
+      !this.hass.states[this._timerEntity];
+
     const accentStyle = config.color
       ? `--tse-accent:${config.color}`
       : "";
@@ -998,8 +1242,15 @@ export class TimerSeCard extends LitElement {
           ${entity
             ? html`<span class="tse-chip ${isOn ? "is-on" : "is-off"} ${["unavailable", "unknown"].includes(entity.state) ? "is-na" : ""}" title="${config.entity}">${this._entityStateText()}</span>`
             : ""}
+          ${this._timerEntity
+            ? html`<span class="tse-chip is-server" title="由 HA 服务端计时">${this._timerEntity}</span>`
+            : ""}
           <span class="tse-status">${this._statusText()}</span>
         </div>
+
+        ${timerEntityMissing
+          ? html`<div class="tse-warn">⚠ 未找到 ${this._timerEntity},请先创建 Timer 辅助元素</div>`
+          : ""}
 
         ${showCountdown
           ? html`<div class="tse-countdown ${isActive ? "is-active" : ""}">
@@ -1101,6 +1352,19 @@ export class TimerSeCard extends LitElement {
       background: var(--divider-color, #bdbdbd);
       color: var(--primary-text-color, #1c1c1e);
       font-style: italic;
+    }
+    .tse-chip.is-server {
+      background: var(--accent-color, var(--tse-accent));
+      color: var(--text-primary-color, #fff);
+      font-family: ui-monospace, "SF Mono", monospace;
+    }
+    .tse-warn {
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--error-color, #db4437);
+      background: color-mix(in srgb, var(--error-color, #db4437) 10%, transparent);
+      border-radius: 6px;
+      padding: 6px 10px;
     }
     .tse-status {
       margin-left: auto;
