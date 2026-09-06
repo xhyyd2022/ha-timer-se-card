@@ -53,8 +53,9 @@ blueprint:
               value: toggle
 
 triggers:
-  - trigger: timer.finished
-    target:
+  - trigger: event
+    event_type: timer.finished
+    event_data:
       entity_id: !input timer_entity
 
 conditions: []
