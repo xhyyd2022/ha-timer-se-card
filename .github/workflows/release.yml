@@ -32,14 +32,10 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.ver.outputs.num }}
 
-      # HACS/手动引用都用固定文件名 ha-timer-se-card.js;另留一份带版本号便于核对
-      - name: Stage assets
-        run: cp dist/ha-timer-se-card.js "dist/ha-timer-se-card-${{ steps.ver.outputs.num }}.js"
-
+      # HA 前端卡片标准:Release 只附一个与仓库同名、可直接加载的模块 JS
+      # (HACS Plugin 类型会扫描该产物;版本号体现在 tag/Release,而非文件名)
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/ha-timer-se-card.js
-            dist/ha-timer-se-card-${{ steps.ver.outputs.num }}.js
+          files: dist/ha-timer-se-card.js
           generate_release_notes: true
