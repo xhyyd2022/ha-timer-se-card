@@ -175,15 +175,18 @@ presets:
 - **倒计时 Timer 实体**:与卡片 `timer_entity` 填写一致的那个 Timer 辅助元素
 - **结束动作目标实体**:到点要操作的实体(如灯光);可再选动作 关闭/开启/切换(默认关闭)
 
-一键导入(会跳转到你的 Home Assistant):
+手动导入步骤(源码文件 `blueprints/automation/ha-timer-se-card/finish-action.yaml`):
 
-[![在 Home Assistant 中导入此蓝图](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://github.com/xhyyd2022/ha-timer-se-card/raw/main/blueprints/automation/ha-timer-se-card/finish-action.yaml)
-
-或手动导入:HA → 设置 → 自动化与场景 → 右下角「导入蓝图」,粘贴下面的链接(源码文件 `blueprints/automation/ha-timer-se-card/finish-action.yaml`):
+1. 打开 HA → **设置 → 自动化与场景**;
+2. 点击右下角 **「导入蓝图」**,将下面的地址完整粘贴到输入框并**导入**:
 
 ```
 https://raw.githubusercontent.com/xhyyd2022/ha-timer-se-card/main/blueprints/automation/ha-timer-se-card/finish-action.yaml
 ```
+
+3. 导入后点击 **「创建自动化」**,选择刚导入的蓝图;
+4. 按提示填写两项输入:**倒计时 Timer 实体**(与卡片 `timer_entity` 一致)、**结束动作目标实体**;如需 开启/切换 可再改「结束动作」;
+5. 保存。
 
 <details>
 <summary>不想用蓝图?也可以手动建一条 automation(等价模板)</summary>
@@ -201,7 +204,7 @@ actions:
 mode: single
 ```
 
-在 HA → 设置 → 自动化与场景 → 创建自动化 → 右上角「…」→ 编辑为 YAML(或直接 Ctrl+V 粘贴)中导入即可。
+手动步骤:HA → **设置 → 自动化与场景** → 创建自动化 → 右上角「…」→ **编辑为 YAML**(或直接 Ctrl+V 粘贴)导入即可。
 </details>
 
 > timer 模式下卡片本身**不再重复执行** `entity/action/actions`(否则会和 automation 双重触发)。
