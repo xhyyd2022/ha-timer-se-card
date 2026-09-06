@@ -311,44 +311,10 @@ export class TimerSeCard extends LitElement {
           { name: "hide_slider", selector: { boolean: {} } },
           { name: "autostart", selector: { boolean: {} } },
             { name: "color", selector: { text: {} } },
-            { name: "event_type", selector: { text: {} } },
-            {
-              name: "event_data",
-              selector: {
-                object: {},
-              },
-            },
             {
               name: "timer_entity",
               selector: {
                 entity: { domain: ["timer"] },
-              },
-            },
-            { name: "entity", selector: { entity: {} } },
-            {
-              name: "action",
-              selector: {
-                select: {
-                  options: [
-                    { value: "on", label: "开启(turn_on)" },
-                    { value: "off", label: "关闭(turn_off)" },
-                  ],
-                  mode: "dropdown",
-                },
-              },
-            },
-            {
-              name: "actions",
-              selector: {
-                object: {
-                  multiple: true,
-                  label_field: "service",
-                  fields: {
-                    service: { label: "服务", selector: { text: {} } },
-                    target: { label: "目标", selector: { object: {} } },
-                    data: { label: "数据", selector: { object: {} } },
-                  },
-                },
               },
             },
           ],
@@ -358,10 +324,6 @@ export class TimerSeCard extends LitElement {
         switch (schema.name) {
           case "card_title":
             return "卡片标题";
-          case "entity":
-            return "触发实体";
-          case "action":
-            return "结束动作";
           case "countdown_display":
             return "时间显示方式";
           case "slider_max":
@@ -376,12 +338,6 @@ export class TimerSeCard extends LitElement {
             return "自动开始";
           case "color":
             return "主题色";
-          case "event_type":
-            return "结束事件类型";
-          case "event_data":
-            return "结束事件数据";
-          case "actions":
-            return "自定义动作";
           case "timer_entity":
             return "Timer 辅助实体(可选)";
           case "automation":
@@ -392,16 +348,8 @@ export class TimerSeCard extends LitElement {
       },
       computeHelper: (schema: any) => {
         switch (schema.name) {
-          case "entity":
-            return "时间到后触发该实体";
-          case "action":
-            return "时间到后开启或关闭实体";
           case "presets":
             return "纯数字为分钟,支持 30s、1h";
-          case "event_type":
-            return "时间到后向 HA 触发此事件";
-          case "actions":
-            return "优先于实体动作";
           case "timer_entity":
             return "一般由所选自动化自动解析,仅解析失败时手动指定";
           case "automation":
@@ -1002,6 +950,12 @@ export class TimerSeCard extends LitElement {
             this._timerEntity = timerId;
             this._storageKey =
               "timer-se-card:" + (this._config.entity || timerId || auto || "default");
+            // 若用户已在解析完成前点了开始,补一次 timer.start,让服务端跟上(时间参数以本地剩余为准)
+            if (this._state === "running" && this._remainingSeconds > 0) {
+              this._callTimerService("start", "active", {
+                duration: Math.max(1, Math.ceil(this._remainingSeconds)),
+              });
+            }
             this._syncServerTimer();
             this.requestUpdate();
           }
@@ -1206,6 +1160,7 @@ export class TimerSeCard extends LitElement {
     }
   }
 
+  // 顶部右侧状态文字:只显示状态,不显示时间(时间见主区域倒计时,避免重复)
   private _statusText(): string {
     switch (this._state) {
       case "running":
@@ -1217,7 +1172,7 @@ export class TimerSeCard extends LitElement {
       case "cancelled":
         return "已取消";
       default:
-        return this._remainingSeconds > 0 ? formatTime(this._remainingSeconds) : "待机";
+        return "待机";
     }
   }
 
@@ -1347,12 +1302,6 @@ export class TimerSeCard extends LitElement {
           ${entity
             ? html`<span class="tse-chip ${isOn ? "is-on" : "is-off"} ${["unavailable", "unknown"].includes(entity.state) ? "is-na" : ""}" title="${config.entity}">${this._entityStateText()}</span>`
             : ""}
-          ${this._timerEntity
-            ? html`<span class="tse-chip is-server" title="由 HA 服务端计时">${this._timerEntity}</span>`
-            : ""}
-          ${this._automation
-            ? html`<span class="tse-chip is-server" title="到点触发该自动化">${this._automation}</span>`
-            : ""}
           <span class="tse-status">${this._statusText()}</span>
         </div>
 
@@ -1466,11 +1415,6 @@ export class TimerSeCard extends LitElement {
       background: var(--divider-color, #bdbdbd);
       color: var(--primary-text-color, #1c1c1e);
       font-style: italic;
-    }
-    .tse-chip.is-server {
-      background: var(--accent-color, var(--tse-accent));
-      color: var(--text-primary-color, #fff);
-      font-family: ui-monospace, "SF Mono", monospace;
     }
     .tse-warn {
       font-size: 12px;

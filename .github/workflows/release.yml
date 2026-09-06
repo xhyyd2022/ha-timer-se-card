@@ -34,8 +34,10 @@ jobs:
 
       # HA 前端卡片标准:Release 只附一个与仓库同名、可直接加载的模块 JS
       # (HACS Plugin 类型会扫描该产物;版本号体现在 tag/Release,而非文件名)
+      # 正式/测试版按 tag 区分:tag 含 "-" (如 v1.6.5-beta.1) 自动标 Pre-release(测试版)
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/ha-timer-se-card.js
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

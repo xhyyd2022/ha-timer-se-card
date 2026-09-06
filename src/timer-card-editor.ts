@@ -159,8 +159,6 @@ export class TimerCardEditor extends LitElement {
   private _computeLabel = (schema: any): string => {
     const labels: Record<string, string> = {
       card_title: "卡片标题",
-      entity: "触发实体",
-      action: "结束动作",
       countdown_display: "时间显示方式",
       slider_max: "滑块最大值",
       slider_unit: "滑块单位",
@@ -168,9 +166,6 @@ export class TimerCardEditor extends LitElement {
       show_manual_input: "显示输入框",
       autostart: "自动开始",
       color: "主题色",
-      event_type: "结束事件类型",
-      event_data: "结束事件数据",
-      actions: "自定义动作",
       timer_entity: "Timer 辅助实体(可选)",
       automation: "结束自动化(蓝图)",
     };
@@ -179,11 +174,7 @@ export class TimerCardEditor extends LitElement {
 
   private _computeHelper = (schema: any): string => {
     const helpers: Record<string, string> = {
-      entity: "时间到后触发该实体",
-      action: "时间到后开启或关闭实体",
       presets: "纯数字为分钟,支持 30s、1h",
-      event_type: "时间到后向 HA 触发此事件",
-      actions: "优先于实体动作",
       timer_entity: "一般由所选自动化自动解析,仅解析失败时手动指定",
       automation: "由蓝图创建、监听某 Timer 的 automation;时长由卡片 timer.start 传入,到点由它执行",
       color: "留空跟随主题",
@@ -244,39 +235,10 @@ export class TimerCardEditor extends LitElement {
           entity: { domain: ["timer"] },
         },
       },
-      { name: "entity", selector: { entity: {} } },
-      {
-        name: "action",
-        selector: {
-          select: {
-            mode: "dropdown",
-            options: [
-              { value: "on", label: "开启(turn_on)" },
-              { value: "off", label: "关闭(turn_off)" },
-            ],
-          },
-        },
-      },
       { name: "hide_slider", selector: { boolean: {} } },
       { name: "show_manual_input", selector: { boolean: {} } },
       { name: "autostart", selector: { boolean: {} } },
       { name: "color", selector: { text: {} } },
-      { name: "event_type", selector: { text: {} } },
-      { name: "event_data", selector: { object: {} } },
-      {
-        name: "actions",
-        selector: {
-          object: {
-            multiple: true,
-            label_field: "service",
-            fields: {
-              service: { label: "服务", selector: { text: {} } },
-              target: { label: "目标", selector: { object: {} } },
-              data: { label: "数据", selector: { object: {} } },
-            },
-          },
-        },
-      },
     ];
   }
 
