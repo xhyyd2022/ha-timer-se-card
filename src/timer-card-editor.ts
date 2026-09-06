@@ -171,8 +171,8 @@ export class TimerCardEditor extends LitElement {
       event_type: "结束事件类型",
       event_data: "结束事件数据",
       actions: "自定义动作",
-      timer_entity: "服务端倒计时实体(Timer helper)",
-      automation: "关联自动化",
+      timer_entity: "Timer 辅助实体(可选)",
+      automation: "结束自动化(蓝图)",
     };
     return labels[schema.name] ?? "";
   };
@@ -184,8 +184,8 @@ export class TimerCardEditor extends LitElement {
       presets: "纯数字为分钟,支持 30s、1h",
       event_type: "时间到后向 HA 触发此事件",
       actions: "优先于实体动作",
-      timer_entity: "计时由 HA 执行,页面关闭也能到点。步骤见 README",
-      automation: "蓝图创建、监听该 Timer 的自动化,仅关联显示。见 README",
+      timer_entity: "一般由所选自动化自动解析,仅解析失败时手动指定",
+      automation: "由蓝图创建、监听某 Timer 的 automation;时长由卡片 timer.start 传入,到点由它执行",
       color: "留空跟随主题",
     };
     return helpers[schema.name] ?? "";
@@ -194,17 +194,10 @@ export class TimerCardEditor extends LitElement {
   private _mainSchema() {
     return [
       { name: "card_title", selector: { text: {} } },
-      { name: "entity", required: true, selector: { entity: {} } },
       {
-        name: "action",
+        name: "automation",
         selector: {
-          select: {
-            mode: "dropdown",
-            options: [
-              { value: "on", label: "开启(turn_on)" },
-              { value: "off", label: "关闭(turn_off)" },
-            ],
-          },
+          entity: { domain: ["automation"] },
         },
       },
       {
@@ -251,10 +244,17 @@ export class TimerCardEditor extends LitElement {
           entity: { domain: ["timer"] },
         },
       },
+      { name: "entity", selector: { entity: {} } },
       {
-        name: "automation",
+        name: "action",
         selector: {
-          entity: { domain: ["automation"] },
+          select: {
+            mode: "dropdown",
+            options: [
+              { value: "on", label: "开启(turn_on)" },
+              { value: "off", label: "关闭(turn_off)" },
+            ],
+          },
         },
       },
       { name: "hide_slider", selector: { boolean: {} } },

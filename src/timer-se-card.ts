@@ -217,8 +217,11 @@ export class TimerSeCard extends LitElement {
   private _timerEntity: string | null = null;
   // 我们最近一次发出的服务调用期望的服务端状态(active/paused/idle),用于抑制竞态误判
   private _timerOp: { expect: string; at: number } | null = null;
-  // 直接触发模式(automation):倒计时结束时调用 automation.trigger 触发所选自动化
+  // 关联 automation(蓝图创建、监听某 timer.finished);计时走 timer.start,
+  // 卡片会从该自动化配置自动解析它监听的 Timer,作为 timer_entity。
   private _automation: string | null = null;
+  // 已尝试过从所选自动化解析其监听的 Timer(记录对象,避免重复请求/重复解析)
+  private _automationResolveFor: string | null = null;
 
   static get version() {
     return CARD_VERSION;
@@ -247,22 +250,9 @@ export class TimerSeCard extends LitElement {
       schema: [
         { name: "card_title", selector: { text: {} } },
         {
-          name: "entity",
-          required: true,
+          name: "automation",
           selector: {
-            entity: {},
-          },
-        },
-        {
-          name: "action",
-          selector: {
-            select: {
-              options: [
-                { value: "on", label: "开启(turn_on)" },
-                { value: "off", label: "关闭(turn_off)" },
-              ],
-              mode: "dropdown",
-            },
+            entity: { domain: ["automation"] },
           },
         },
         {
@@ -334,10 +324,17 @@ export class TimerSeCard extends LitElement {
                 entity: { domain: ["timer"] },
               },
             },
+            { name: "entity", selector: { entity: {} } },
             {
-              name: "automation",
+              name: "action",
               selector: {
-                entity: { domain: ["automation"] },
+                select: {
+                  options: [
+                    { value: "on", label: "开启(turn_on)" },
+                    { value: "off", label: "关闭(turn_off)" },
+                  ],
+                  mode: "dropdown",
+                },
               },
             },
             {
@@ -386,9 +383,9 @@ export class TimerSeCard extends LitElement {
           case "actions":
             return "自定义动作";
           case "timer_entity":
-            return "服务端倒计时实体";
+            return "Timer 辅助实体(可选)";
           case "automation":
-            return "关联自动化";
+            return "结束自动化(蓝图)";
           default:
             return undefined;
         }
@@ -406,9 +403,9 @@ export class TimerSeCard extends LitElement {
           case "actions":
             return "优先于实体动作";
           case "timer_entity":
-            return "计时由 HA 执行,页面关闭也能到点。步骤见 README";
+            return "一般由所选自动化自动解析,仅解析失败时手动指定";
           case "automation":
-            return "蓝图创建、监听该 Timer 的自动化,仅关联显示。见 README";
+            return "由蓝图创建、监听某 Timer 的 automation;时长由卡片 timer.start 传入,到点由它执行";
           case "color":
             return "留空跟随主题";
           default:
@@ -458,9 +455,12 @@ export class TimerSeCard extends LitElement {
     // timer_entity:可选 HA Timer helper;仅接受 timer.*
     const te = typeof merged.timer_entity === "string" ? merged.timer_entity.trim() : "";
     this._timerEntity = te.startsWith("timer.") ? te : null;
-    // automation:可选,直接触发的自动化;仅接受 automation.*
+    // automation:可选关联;仅接受 automation.*;变更后需重新解析其监听的 Timer
     const au = typeof merged.automation === "string" ? merged.automation.trim() : "";
     this._automation = au.startsWith("automation.") ? au : null;
+    if (this._automation && this._automation !== this._automationResolveFor) {
+      this._automationResolveFor = null; // 允许对新 automation 重新解析
+    }
     this._valid = !!(
       merged.entity ||
       (Array.isArray(merged.actions) && merged.actions.length) ||
@@ -512,6 +512,8 @@ export class TimerSeCard extends LitElement {
     }
     // 服务端倒计时模式:每次状态刷新都核对一次绑定的 timer 实体(只读该实体)
     this._syncServerTimer();
+    // 只选了 automation 时,尝试从它解析监听的 Timer(timer_entity)
+    this._resolveTimerFromAutomation();
   }
 
   /* ---------------- 设备状态绑定 ---------------- */
@@ -978,6 +980,79 @@ export class TimerSeCard extends LitElement {
     this._updateRender();
   }
 
+  /* ---------------- 从所选自动化解析其监听的 Timer ---------------- */
+
+  // 用户只选了 automation(蓝图创建,监听某 timer.finished)时,自动从自动化配置里
+  // 取出那个 Timer 辅助实体,作为本卡片的 timer_entity —— 前端不必再手动选 Timer。
+  private _resolveTimerFromAutomation(): void {
+    const auto = this._automation;
+    if (!auto || this._timerEntity || this._automationResolveFor === auto) return;
+    const conn = this.hass && this.hass.connection;
+    if (!conn || typeof conn.sendMessagePromise !== "function") return;
+    this._automationResolveFor = auto;
+    try {
+      const p = conn.sendMessagePromise<{ config?: any }>({
+        type: "automation/config",
+        entity_id: auto,
+      });
+      if (p && typeof p.then === "function") {
+        p.then((res) => {
+          const timerId = this._extractTimerFromAutomation(res && res.config);
+          if (timerId && timerId.startsWith("timer.")) {
+            this._timerEntity = timerId;
+            this._storageKey =
+              "timer-se-card:" + (this._config.entity || timerId || auto || "default");
+            this._syncServerTimer();
+            this.requestUpdate();
+          }
+        }).catch((e: unknown) =>
+          console.warn("timer-se-card: 读取自动化配置失败", e)
+        );
+      }
+    } catch (e) {
+      console.warn("timer-se-card: 读取自动化配置失败", e);
+    }
+  }
+
+  // 从 automation 原始配置里找 timer.finished 触发的目标 Timer(entity_id)
+  private _extractTimerFromAutomation(cfg: any): string | null {
+    const list: any[] = [];
+    const push = (t: any): void => {
+      if (t && typeof t === "object") list.push(t);
+    };
+    if (Array.isArray(cfg && cfg.triggers)) cfg.triggers.forEach(push);
+    else if (Array.isArray(cfg && cfg.trigger)) cfg.trigger.forEach(push);
+    else if (cfg && cfg.trigger && typeof cfg.trigger === "object") push(cfg.trigger);
+    for (const t of list) {
+      // 蓝图当前写法:event 触发器 + event_data.entity_id
+      if (
+        t.trigger === "event" &&
+        t.event_type === "timer.finished" &&
+        t.event_data &&
+        typeof t.event_data.entity_id === "string" &&
+        t.event_data.entity_id.startsWith("timer.")
+      ) {
+        return t.event_data.entity_id;
+      }
+      // 新版写法:timer.finished + target.entity_id / entity_id
+      if (
+        (t.trigger === "timer.finished" || t.trigger === "timer") &&
+        typeof (t.target && t.target.entity_id) === "string" &&
+        t.target.entity_id.startsWith("timer.")
+      ) {
+        return t.target.entity_id;
+      }
+      if (
+        t.trigger === "timer.finished" &&
+        typeof t.entity_id === "string" &&
+        t.entity_id.startsWith("timer.")
+      ) {
+        return t.entity_id;
+      }
+    }
+    return null;
+  }
+
   /* ---------------- input ---------------- */
 
   // 单位换算(与上游一致:滑块数值 × 单位 → 秒)
@@ -1255,8 +1330,11 @@ export class TimerSeCard extends LitElement {
       !!this.hass &&
       !!this.hass.states &&
       !this.hass.states[this._automation];
-    // automation 只是关联:必须与 timer_entity 一起配(蓝图 automation 监听的就是那个 Timer)
-    const automationNeedsTimer = !!this._automation && !this._timerEntity;
+    // automation 只是关联:卡片会从它解析监听的 Timer;若解析失败且未指定 timer_entity → 提示
+    const automationTimerMissing =
+      !!this._automation &&
+      !this._timerEntity &&
+      this._automationResolveFor === this._automation;
 
     const accentStyle = config.color
       ? `--tse-accent:${config.color}`
@@ -1284,8 +1362,8 @@ export class TimerSeCard extends LitElement {
         ${automationMissing
           ? html`<div class="tse-warn">⚠ 未找到自动化 ${this._automation},请先创建或检查 entity_id</div>`
           : ""}
-        ${automationNeedsTimer
-          ? html`<div class="tse-warn">⚠ 关联自动化需同时配置 timer_entity(即该自动化监听的 Timer 辅助实体)</div>`
+        ${automationTimerMissing
+          ? html`<div class="tse-warn">⚠ 无法从所选自动化解析 Timer:请确认它由本项目蓝图创建(监听 timer.finished),或手动填写 timer_entity</div>`
           : ""}
 
         ${showCountdown
