@@ -35,13 +35,15 @@ type: module
 type: custom:timer-se-card
 card_title: 睡前关灯
 timer_entity: timer.bedroom_fan   # 你的 Timer 辅助实体(需先创建,见下)
+automation: automation.sleep_light_off   # 可选:蓝图创建的那条自动化(仅关联显示)
 presets:
   - 15
   - 30
   - 60
 ```
 
-> 一个 Timer 实体同时只能跑一个倒计时,一张卡片对应一个即可。
+> `automation` 为**可选关联项**:把它填成由下方蓝图创建、监听这个 `timer_entity` 的那条自动化,
+> 卡片顶部会显示其名称并在找不到时提示——执行仍完全由该自动化完成,卡片只负责把时间参数传给 Timer。
 
 ---
 
@@ -72,5 +74,16 @@ https://raw.githubusercontent.com/xhyyd2022/ha-timer-se-card/main/blueprints/aut
    - 「结束动作」默认**关闭**,可改 开启/切换;
 3. 保存。
 
-此后:在卡片上设置时长并开始 → HA 服务端倒数 → 到点时该自动化自动执行结束动作(页面/浏览器关掉同样生效);
-卡片只负责显示倒计时和把时间参数传给 `timer.start`,不需要也无法再触发它——关联靠同一个 `timer.xxx` 自动完成。
+此后:在卡片上设置时长并开始 → 卡片把时间参数传给 `timer.start` → HA 服务端倒数 →
+到点时这条自动化(它监听着同一个 `timer.xxx`)自动执行结束动作,页面/浏览器关掉同样生效;
+前端只负责显示倒计时和传入时间参数,执行完全由自动化完成。
+
+---
+
+## License
+
+本项目是 [ha-simple-timer](https://github.com/ArikShemesh/ha-simple-timer)
+(Arik Shemesh) 的派生作品,卡片布局参考并精简自其 timer-card.ts。
+
+本程序基于 **GNU General Public License v3.0 (GPLv3)** 发布,与上游项目保持相同的开源许可。
+完整许可文本见 [LICENSE](./LICENSE)。

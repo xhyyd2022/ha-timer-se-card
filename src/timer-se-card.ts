@@ -57,6 +57,7 @@ interface TimerSeCardConfig {
   actions?: Array<{ service: string; target?: Record<string, unknown>; data?: Record<string, unknown> }>;
   card_title?: string; // 卡片标题(与上游一致)
   timer_entity?: string; // 可选:HA Timer helper 实体(timer.xxx);配置后倒计时由 HA 服务端执行
+  automation?: string; // 可选:HA automation 实体(automation.xxx);倒计时结束时直接触发它(前端计时模式)
   presets?: (number | string | { minutes?: number; seconds?: number; label?: string })[];
   slider_max?: number; // 滑块最大值(上游默认 120)
   slider_unit?: string; // "min" | "sec" | "hr"(上游默认 min)
@@ -216,6 +217,8 @@ export class TimerSeCard extends LitElement {
   private _timerEntity: string | null = null;
   // 我们最近一次发出的服务调用期望的服务端状态(active/paused/idle),用于抑制竞态误判
   private _timerOp: { expect: string; at: number } | null = null;
+  // 直接触发模式(automation):倒计时结束时调用 automation.trigger 触发所选自动化
+  private _automation: string | null = null;
 
   static get version() {
     return CARD_VERSION;
@@ -332,6 +335,12 @@ export class TimerSeCard extends LitElement {
               },
             },
             {
+              name: "automation",
+              selector: {
+                entity: { domain: ["automation"] },
+              },
+            },
+            {
               name: "actions",
               selector: {
                 object: {
@@ -378,6 +387,8 @@ export class TimerSeCard extends LitElement {
             return "自定义动作";
           case "timer_entity":
             return "服务端倒计时实体";
+          case "automation":
+            return "关联自动化";
           default:
             return undefined;
         }
@@ -395,7 +406,9 @@ export class TimerSeCard extends LitElement {
           case "actions":
             return "优先于实体动作";
           case "timer_entity":
-            return "计时改由 HA 执行,页面关闭也能到点(详见 README)";
+            return "计时由 HA 执行,页面关闭也能到点。步骤见 README";
+          case "automation":
+            return "蓝图创建、监听该 Timer 的自动化,仅关联显示。见 README";
           case "color":
             return "留空跟随主题";
           default:
@@ -445,14 +458,18 @@ export class TimerSeCard extends LitElement {
     // timer_entity:可选 HA Timer helper;仅接受 timer.*
     const te = typeof merged.timer_entity === "string" ? merged.timer_entity.trim() : "";
     this._timerEntity = te.startsWith("timer.") ? te : null;
+    // automation:可选,直接触发的自动化;仅接受 automation.*
+    const au = typeof merged.automation === "string" ? merged.automation.trim() : "";
+    this._automation = au.startsWith("automation.") ? au : null;
     this._valid = !!(
       merged.entity ||
       (Array.isArray(merged.actions) && merged.actions.length) ||
       (merged.action && typeof merged.action === "object" && (merged.action as any).service) ||
       (typeof merged.event_type === "string" && merged.event_type.length > 0) ||
-      !!this._timerEntity
+      !!this._timerEntity ||
+      !!this._automation
     );
-    this._storageKey = "timer-se-card:" + (merged.entity || this._timerEntity || "default");
+    this._storageKey = "timer-se-card:" + (merged.entity || this._timerEntity || this._automation || "default");
 
     // 恢复逻辑只在首次 setConfig 时执行;编辑器调整配置会多次调用 setConfig,
     // 重复恢复会干扰运行中的倒计时
@@ -1006,6 +1023,8 @@ export class TimerSeCard extends LitElement {
 
   private _resolveActions(): Array<{ service: string; target?: Record<string, unknown>; data?: Record<string, unknown> }> {
     const config = this._config;
+    // automation 字段仅为"关联显示/校验"(对应蓝图创建的 automation,监听本卡片的 timer_entity),
+    // 到点执行由该 automation 完成,卡片本身不重复触发它,避免双重执行。
     if (Array.isArray(config.actions) && config.actions.length) {
       return config.actions.filter((a) => a && typeof a.service === "string");
     }
@@ -1230,6 +1249,14 @@ export class TimerSeCard extends LitElement {
       !!this.hass &&
       !!this.hass.states &&
       !this.hass.states[this._timerEntity];
+    // 直接触发模式:配置了 automation 但找不到该自动化 → 提示
+    const automationMissing =
+      !!this._automation &&
+      !!this.hass &&
+      !!this.hass.states &&
+      !this.hass.states[this._automation];
+    // automation 只是关联:必须与 timer_entity 一起配(蓝图 automation 监听的就是那个 Timer)
+    const automationNeedsTimer = !!this._automation && !this._timerEntity;
 
     const accentStyle = config.color
       ? `--tse-accent:${config.color}`
@@ -1245,11 +1272,20 @@ export class TimerSeCard extends LitElement {
           ${this._timerEntity
             ? html`<span class="tse-chip is-server" title="由 HA 服务端计时">${this._timerEntity}</span>`
             : ""}
+          ${this._automation
+            ? html`<span class="tse-chip is-server" title="到点触发该自动化">${this._automation}</span>`
+            : ""}
           <span class="tse-status">${this._statusText()}</span>
         </div>
 
         ${timerEntityMissing
           ? html`<div class="tse-warn">⚠ 未找到 ${this._timerEntity},请先创建 Timer 辅助元素</div>`
+          : ""}
+        ${automationMissing
+          ? html`<div class="tse-warn">⚠ 未找到自动化 ${this._automation},请先创建或检查 entity_id</div>`
+          : ""}
+        ${automationNeedsTimer
+          ? html`<div class="tse-warn">⚠ 关联自动化需同时配置 timer_entity(即该自动化监听的 Timer 辅助实体)</div>`
           : ""}
 
         ${showCountdown

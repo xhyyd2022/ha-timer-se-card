@@ -16,6 +16,7 @@ interface TimerSeCardConfig {
   actions?: Array<{ service: string; target?: Record<string, unknown>; data?: Record<string, unknown> }>;
   card_title?: string;
   timer_entity?: string;
+  automation?: string;
   timer_buttons?: (number | string)[];
   slider_max?: number;
   slider_unit?: string;
@@ -171,6 +172,7 @@ export class TimerCardEditor extends LitElement {
       event_data: "结束事件数据",
       actions: "自定义动作",
       timer_entity: "服务端倒计时实体(Timer helper)",
+      automation: "关联自动化",
     };
     return labels[schema.name] ?? "";
   };
@@ -182,8 +184,8 @@ export class TimerCardEditor extends LitElement {
       presets: "纯数字为分钟,支持 30s、1h",
       event_type: "时间到后向 HA 触发此事件",
       actions: "优先于实体动作",
-      timer_entity:
-        "可选。计时改由 HA 执行,页面关闭也能到点;结束动作由 automation 监听 timer.finished(详见 README)",
+      timer_entity: "计时由 HA 执行,页面关闭也能到点。步骤见 README",
+      automation: "蓝图创建、监听该 Timer 的自动化,仅关联显示。见 README",
       color: "留空跟随主题",
     };
     return helpers[schema.name] ?? "";
@@ -247,6 +249,12 @@ export class TimerCardEditor extends LitElement {
         name: "timer_entity",
         selector: {
           entity: { domain: ["timer"] },
+        },
+      },
+      {
+        name: "automation",
+        selector: {
+          entity: { domain: ["automation"] },
         },
       },
       { name: "hide_slider", selector: { boolean: {} } },
